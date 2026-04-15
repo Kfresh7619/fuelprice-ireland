@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../../../lib/supabase'
 const BASE_URL = 'https://api.oilpriceapi.com/v1/prices/latest'
 const PETROL_CODE = 'GASOLINE_RETAIL_IE_EUR'
 const DIESEL_CODE = 'DIESEL_RETAIL_IE_EUR'
+const ANOMALY_THRESHOLD = 0.20
 
 async function fetchIrelandPrices() {
   const headers = {
@@ -15,7 +16,6 @@ async function fetchIrelandPrices() {
     fetch(`${BASE_URL}?by_code=${DIESEL_CODE}`, { headers }),
   ])
 
-  // If either specific Ireland code fails, fall back to generic EU codes
   let petrolPrice = null
   let dieselPrice = null
 
@@ -29,7 +29,6 @@ async function fetchIrelandPrices() {
     dieselPrice = data?.data?.price ?? null
   }
 
-  // Fallback: if Ireland-specific codes not found, use generic diesel/gasoline
   if (!petrolPrice || !dieselPrice) {
     const fallbackRes = await fetch(
       `${BASE_URL}?by_code=GASOLINE_USD,DIESEL_USD`,
@@ -45,8 +44,6 @@ async function fetchIrelandPrices() {
         ? items.find(i => i.code === 'DIESEL_USD')
         : null
 
-      // Convert USD/gallon to EUR/litre (approximate)
-      // 1 gallon = 3.785 litres, USD to EUR ~0.92
       if (!petrolPrice && gasItem?.price) {
         petrolPrice = parseFloat(((gasItem.price / 3.785) * 0.92).toFixed(3))
       }
@@ -65,6 +62,7 @@ export async function runScraper() {
     petrol_price: null,
     diesel_price: null,
     stations_updated: 0,
+    anomalies_flagged: 0,
     source: null,
     error: null,
   }
@@ -80,7 +78,6 @@ export async function runScraper() {
     results.diesel_price = dieselPrice
     results.source = 'oilpriceapi'
 
-    // Fetch all active stations
     const { data: stations, error: stationsError } = await supabaseAdmin
       .from('stations')
       .select('id, name, county')
@@ -88,22 +85,49 @@ export async function runScraper() {
 
     if (stationsError) throw new Error(stationsError.message)
 
-    // Apply small per-station variance (+/- 4c) around the national average
-    // This simulates realistic regional differences
-    const priceRows = stations.map(station => ({
-      station_id: station.id,
-      petrol_price: petrolPrice
-        ? parseFloat((petrolPrice + (Math.random() * 0.08 - 0.04)).toFixed(3))
-        : null,
-      diesel_price: dieselPrice
-        ? parseFloat((dieselPrice + (Math.random() * 0.08 - 0.04)).toFixed(3))
-        : null,
-      source: 'scraper',
-      source_url: 'https://www.oilpriceapi.com',
-      scraped_at: new Date().toISOString(),
-    }))
+    // Fetch the most recent price row for each station for anomaly comparison
+    const { data: prevPrices } = await supabaseAdmin
+      .from('prices')
+      .select('station_id, petrol_price, diesel_price')
+      .in('station_id', stations.map(s => s.id))
+      .order('scraped_at', { ascending: false })
+      .limit(stations.length)
 
-    // Batch insert all price rows
+    const prevMap = {}
+    for (const p of prevPrices ?? []) {
+      if (!prevMap[p.station_id]) prevMap[p.station_id] = p
+    }
+
+    const priceRows = stations.map(station => {
+      const prev = prevMap[station.id]
+
+      const newPetrol = petrolPrice
+        ? parseFloat((petrolPrice + (Math.random() * 0.08 - 0.04)).toFixed(3))
+        : null
+      const newDiesel = dieselPrice
+        ? parseFloat((dieselPrice + (Math.random() * 0.08 - 0.04)).toFixed(3))
+        : null
+
+      const petrolAnomaly = prev && newPetrol && prev.petrol_price
+        ? Math.abs(newPetrol - prev.petrol_price) > ANOMALY_THRESHOLD
+        : false
+      const dieselAnomaly = prev && newDiesel && prev.diesel_price
+        ? Math.abs(newDiesel - prev.diesel_price) > ANOMALY_THRESHOLD
+        : false
+
+      return {
+        station_id: station.id,
+        petrol_price: newPetrol,
+        diesel_price: newDiesel,
+        source: 'scraper',
+        source_url: 'https://www.oilpriceapi.com',
+        scraped_at: new Date().toISOString(),
+        is_anomaly: petrolAnomaly || dieselAnomaly,
+      }
+    })
+
+    results.anomalies_flagged = priceRows.filter(r => r.is_anomaly).length
+
     const { error: insertError } = await supabaseAdmin
       .from('prices')
       .insert(priceRows)
@@ -112,7 +136,6 @@ export async function runScraper() {
 
     results.stations_updated = priceRows.length
 
-    // Refresh the materialised view
     const { error: refreshError } = await supabaseAdmin
       .rpc('refresh_cheapest_view')
 
