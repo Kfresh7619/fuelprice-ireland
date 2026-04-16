@@ -11,12 +11,6 @@ const STATUS_COLOR = {
   unknown: '#d97706',
 }
 
-const STATUS_BG = {
-  available: '#f0fdf4',
-  unavailable: '#fef2f2',
-  unknown: '#fffbeb',
-}
-
 function timeAgo(dateStr) {
   if (!dateStr) return 'unknown'
   const diff = Math.floor((Date.now() - new Date(dateStr)) / 1000)
@@ -70,10 +64,37 @@ function FreshnessTag({ dateStr }) {
   )
 }
 
+function ConfidenceDots({ confidence = 3 }) {
+  const score = Math.round(confidence)
+  return (
+    <span style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+      {[1, 2, 3, 4, 5].map(i => (
+        <span key={i} style={{
+          width: 5, height: 5, borderRadius: '50%',
+          background: i <= score
+            ? score >= 4 ? '#16a34a' : score >= 2 ? '#d97706' : '#dc2626'
+            : '#e5e7eb',
+        }} />
+      ))}
+    </span>
+  )
+}
+
+function distKm(pos, s) {
+  const R = 6371
+  const dLat = (s.lat - pos.lat) * Math.PI / 180
+  const dLng = (s.lng - pos.lng) * Math.PI / 180
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(pos.lat * Math.PI / 180) * Math.cos(s.lat * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
 export default function Home() {
   const mapContainer = useRef(null)
   const map = useRef(null)
   const markersRef = useRef({})
+
   const [stations, setStations] = useState([])
   const [cheapest, setCheapest] = useState({ cheapestPetrol: null, cheapestDiesel: null })
   const [selected, setSelected] = useState(null)
@@ -82,16 +103,33 @@ export default function Home() {
   const [sortBy, setSortBy] = useState('price')
   const [search, setSearch] = useState('')
   const [userPos, setUserPos] = useState(null)
+  const [mobileListOpen, setMobileListOpen] = useState(false)
+
   const [reportModal, setReportModal] = useState(null)
+  const [reportType, setReportType] = useState('price_update')
   const [reportForm, setReportForm] = useState({})
   const [submitting, setSubmitting] = useState(false)
-  const [submitMsg, setSubmitMsg] = useState('')
-  const [mobileListOpen, setMobileListOpen] = useState(false)
+  const [submitResult, setSubmitResult] = useState(null)
+
+  const [geofencePrompt, setGeofencePrompt] = useState(null)
+  const [confirming, setConfirming] = useState(null)
+  const [confirmResult, setConfirmResult] = useState(null)
+
+  const [contributorBadge, setContributorBadge] = useState(null)
 
   useEffect(() => {
     fetch('/api/stations').then(r => r.json()).then(setStations)
     fetch('/api/cheapest').then(r => r.json()).then(setCheapest)
   }, [])
+
+  // Geofence check — if user is within 300m of a station, prompt to confirm
+  useEffect(() => {
+    if (!userPos || !stations.length) return
+    const nearby = stations.filter(s => distKm(userPos, s) < 0.3)
+    if (nearby.length > 0 && !geofencePrompt) {
+      setGeofencePrompt(nearby[0])
+    }
+  }, [userPos, stations])
 
   useEffect(() => {
     if (map.current || !mapContainer.current) return
@@ -132,15 +170,6 @@ export default function Home() {
     })
   }, [stations])
 
-  const dist = useCallback((pos, s) => {
-    const R = 6371
-    const dLat = (s.lat - pos.lat) * Math.PI / 180
-    const dLng = (s.lng - pos.lng) * Math.PI / 180
-    const a = Math.sin(dLat / 2) ** 2 +
-      Math.cos(pos.lat * Math.PI / 180) * Math.cos(s.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-  }, [])
-
   const getFiltered = useCallback(() => {
     let list = [...stations]
     if (search) {
@@ -165,12 +194,12 @@ export default function Home() {
         return (ap ?? 99) - (bp ?? 99)
       })
     } else if (sortBy === 'distance' && userPos) {
-      list.sort((a, b) => dist(userPos, a) - dist(userPos, b))
+      list.sort((a, b) => distKm(userPos, a) - distKm(userPos, b))
     } else if (sortBy === 'updated') {
       list.sort((a, b) => new Date(b.latestPrice?.scraped_at ?? 0) - new Date(a.latestPrice?.scraped_at ?? 0))
     }
     return list
-  }, [stations, search, availOnly, fuelFilter, sortBy, userPos, dist])
+  }, [stations, search, availOnly, fuelFilter, sortBy, userPos])
 
   const locateMe = () => {
     if (!navigator.geolocation) return
@@ -184,6 +213,25 @@ export default function Home() {
     })
   }
 
+  const handleConfirm = async (station) => {
+    setConfirming(station.id)
+    const res = await fetch('/api/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ station_id: station.id, county: station.county }),
+    })
+    const data = await res.json()
+    setConfirming(null)
+    setGeofencePrompt(null)
+    setConfirmResult({
+      message: data.already_confirmed
+        ? 'Already confirmed recently — thanks!'
+        : data.message ?? 'Confirmed!',
+      county: station.county,
+    })
+    setTimeout(() => setConfirmResult(null), 4000)
+  }
+
   const submitReport = async () => {
     if (!reportModal) return
     setSubmitting(true)
@@ -193,19 +241,22 @@ export default function Home() {
       diesel_price: reportForm.diesel_price ? parseFloat(reportForm.diesel_price) : undefined,
       petrol_status: reportForm.petrol_status ?? reportModal.petrolStatus?.status ?? 'unknown',
       diesel_status: reportForm.diesel_status ?? reportModal.dieselStatus?.status ?? 'unknown',
+      report_type: reportType,
+      county: reportModal.county,
     }
     const res = await fetch('/api/report', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
+    const data = await res.json()
     setSubmitting(false)
     if (res.ok) {
-      setSubmitMsg('Update submitted. Thank you!')
-      setTimeout(() => { setReportModal(null); setSubmitMsg('') }, 2000)
+      setSubmitResult(data)
+      if (data.contributor) setContributorBadge(data.contributor)
+      setTimeout(() => { setReportModal(null); setSubmitResult(null) }, 3000)
     } else {
-      const { error } = await res.json()
-      setSubmitMsg(error ?? 'Something went wrong')
+      setSubmitResult({ error: data.error ?? 'Something went wrong' })
     }
   }
 
@@ -215,8 +266,7 @@ export default function Home() {
     const isCheapestPetrol = cheapest.cheapestPetrol?.station_id === s.id
     const isCheapestDiesel = cheapest.cheapestDiesel?.station_id === s.id
     const isSelected = selected?.id === s.id
-    const dStr = userPos ? `${dist(userPos, s).toFixed(1)} km` : ''
-    const freshness = freshnessState(s.latestPrice?.scraped_at)
+    const dStr = userPos ? `${distKm(userPos, s).toFixed(1)} km` : ''
 
     return (
       <div
@@ -226,13 +276,10 @@ export default function Home() {
           map.current?.flyTo({ center: [s.lng, s.lat], zoom: 14 })
         }}
         style={{
-          padding: '10px 12px',
-          borderRadius: 9,
+          padding: '10px 12px', borderRadius: 9, marginBottom: 5, cursor: 'pointer',
           border: `1px solid ${isSelected ? '#1d4ed8' : '#e5e7eb'}`,
           borderLeft: isCheapestPetrol ? '3px solid #16a34a' : isCheapestDiesel ? '3px solid #d97706' : undefined,
           background: isSelected ? '#eff6ff' : '#fff',
-          marginBottom: 5,
-          cursor: 'pointer',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
@@ -252,16 +299,9 @@ export default function Home() {
 
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           {fuelFilter !== 'diesel' && (
-            <div style={{
-              padding: '5px 9px', borderRadius: 6,
-              border: `1px solid ${isCheapestPetrol ? '#16a34a' : '#e5e7eb'}`,
-              background: isCheapestPetrol ? '#f0fdf4' : '#f9fafb',
-              minWidth: 64, textAlign: 'center',
-            }}>
+            <div style={{ padding: '5px 9px', borderRadius: 6, border: `1px solid ${isCheapestPetrol ? '#16a34a' : '#e5e7eb'}`, background: isCheapestPetrol ? '#f0fdf4' : '#f9fafb', minWidth: 64, textAlign: 'center' }}>
               <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#9ca3af', letterSpacing: '0.4px' }}>Petrol</div>
-              <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'monospace', color: isCheapestPetrol ? '#16a34a' : '#111' }}>
-                €{Number(s.latestPrice?.petrol_price ?? 0).toFixed(3)}
-              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'monospace', color: isCheapestPetrol ? '#16a34a' : '#111' }}>€{Number(s.latestPrice?.petrol_price ?? 0).toFixed(3)}</div>
               <div style={{ fontSize: 9, color: STATUS_COLOR[s.petrolStatus?.status ?? 'unknown'], display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
                 <AvailabilityDot status={s.petrolStatus?.status} size={5} />
                 {s.petrolStatus?.status ?? 'unknown'}
@@ -269,16 +309,9 @@ export default function Home() {
             </div>
           )}
           {fuelFilter !== 'petrol' && (
-            <div style={{
-              padding: '5px 9px', borderRadius: 6,
-              border: `1px solid ${isCheapestDiesel ? '#d97706' : '#e5e7eb'}`,
-              background: isCheapestDiesel ? '#fffbeb' : '#f9fafb',
-              minWidth: 64, textAlign: 'center',
-            }}>
+            <div style={{ padding: '5px 9px', borderRadius: 6, border: `1px solid ${isCheapestDiesel ? '#d97706' : '#e5e7eb'}`, background: isCheapestDiesel ? '#fffbeb' : '#f9fafb', minWidth: 64, textAlign: 'center' }}>
               <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#9ca3af', letterSpacing: '0.4px' }}>Diesel</div>
-              <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'monospace', color: isCheapestDiesel ? '#d97706' : '#111' }}>
-                €{Number(s.latestPrice?.diesel_price ?? 0).toFixed(3)}
-              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'monospace', color: isCheapestDiesel ? '#d97706' : '#111' }}>€{Number(s.latestPrice?.diesel_price ?? 0).toFixed(3)}</div>
               <div style={{ fontSize: 9, color: STATUS_COLOR[s.dieselStatus?.status ?? 'unknown'], display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
                 <AvailabilityDot status={s.dieselStatus?.status} size={5} />
                 {s.dieselStatus?.status ?? 'unknown'}
@@ -289,6 +322,7 @@ export default function Home() {
           <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
             {dStr && <div style={{ fontSize: 11, color: '#9ca3af' }}>{dStr}</div>}
             <FreshnessTag dateStr={s.latestPrice?.scraped_at} />
+            <ConfidenceDots confidence={s.latestPrice?.confidence ?? 3} />
           </div>
         </div>
       </div>
@@ -325,22 +359,24 @@ export default function Home() {
                 <div style={{ fontWeight: 600, fontSize: 15, letterSpacing: '-0.2px' }}>FuelPrice Ireland</div>
                 <div style={{ fontSize: 11, color: '#6b7280', fontFamily: 'monospace' }}>Live prices + availability</div>
               </div>
+              {contributorBadge && (
+                <div style={{ marginLeft: 'auto', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '4px 8px', fontSize: 11, color: '#1d4ed8', textAlign: 'center' }}>
+                  <div style={{ fontWeight: 600 }}>Score {contributorBadge.score}</div>
+                  <div style={{ fontSize: 10, color: '#6b7280' }}>{contributorBadge.submissions} updates</div>
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', gap: 10, background: '#f9fafb', borderRadius: 8, padding: '8px 10px', marginBottom: 10, border: '1px solid #e5e7eb' }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Cheapest petrol</div>
-                <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'monospace', color: '#16a34a' }}>
-                  {cheapest.cheapestPetrol ? `€${Number(cheapest.cheapestPetrol.petrol_price).toFixed(3)}` : '—'}
-                </div>
+                <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'monospace', color: '#16a34a' }}>{cheapest.cheapestPetrol ? `€${Number(cheapest.cheapestPetrol.petrol_price).toFixed(3)}` : '—'}</div>
                 <div style={{ fontSize: 10, color: '#9ca3af' }}>{cheapest.cheapestPetrol?.town ?? '—'}</div>
               </div>
               <div style={{ width: 1, background: '#e5e7eb' }} />
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Cheapest diesel</div>
-                <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'monospace', color: '#d97706' }}>
-                  {cheapest.cheapestDiesel ? `€${Number(cheapest.cheapestDiesel.diesel_price).toFixed(3)}` : '—'}
-                </div>
+                <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'monospace', color: '#d97706' }}>{cheapest.cheapestDiesel ? `€${Number(cheapest.cheapestDiesel.diesel_price).toFixed(3)}` : '—'}</div>
                 <div style={{ fontSize: 10, color: '#9ca3af' }}>{cheapest.cheapestDiesel?.town ?? '—'}</div>
               </div>
             </div>
@@ -396,13 +432,53 @@ export default function Home() {
             </div>
           </div>
 
+          {/* Geofence prompt */}
+          {geofencePrompt && (
+            <div style={{ position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)', background: '#fff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '12px 16px', zIndex: 600, minWidth: 280, textAlign: 'center' }}>
+              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>You're near {geofencePrompt.name}</div>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>Are today's prices still correct?</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => handleConfirm(geofencePrompt)}
+                  disabled={confirming === geofencePrompt.id}
+                  style={{ flex: 1, padding: '8px 0', background: '#16a34a', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
+                >
+                  {confirming === geofencePrompt.id ? 'Confirming...' : 'Yes, looks right'}
+                </button>
+                <button
+                  onClick={() => { setReportModal(geofencePrompt); setReportType('price_update'); setGeofencePrompt(null) }}
+                  style={{ flex: 1, padding: '8px 0', background: '#f9fafb', color: '#374151', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, cursor: 'pointer' }}
+                >
+                  Update price
+                </button>
+                <button
+                  onClick={() => setGeofencePrompt(null)}
+                  style={{ padding: '8px 10px', background: 'transparent', color: '#9ca3af', border: 'none', cursor: 'pointer', fontSize: 13 }}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Confirm result toast */}
+          {confirmResult && (
+            <div style={{ position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 10, padding: '10px 16px', zIndex: 600, textAlign: 'center', whiteSpace: 'nowrap' }}>
+              <div style={{ fontSize: 13, fontWeight: 500, color: '#15803d' }}>{confirmResult.message}</div>
+              {confirmResult.county && <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>Helping drivers in {confirmResult.county}</div>}
+            </div>
+          )}
+
           {/* Station detail panel */}
           {selected && (
-            <div style={{ position: 'absolute', bottom: 0, right: 0, width: 290, background: '#fff', borderTop: '1px solid #e5e7eb', borderLeft: '1px solid #e5e7eb', borderRadius: '10px 0 0 0', padding: 16, zIndex: 10 }}>
+            <div style={{ position: 'absolute', bottom: 0, right: 0, width: 300, background: '#fff', borderTop: '1px solid #e5e7eb', borderLeft: '1px solid #e5e7eb', borderRadius: '10px 0 0 0', padding: 16, zIndex: 10 }}>
               <button onClick={() => setSelected(null)} style={{ position: 'absolute', top: 10, right: 10, background: '#f3f4f6', border: 'none', borderRadius: 5, width: 22, height: 22, cursor: 'pointer', fontSize: 14, color: '#6b7280' }}>×</button>
               <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 2 }}>{selected.name}</div>
               <div style={{ fontSize: 12, color: '#6b7280', fontFamily: 'monospace', marginBottom: 4 }}>{selected.brand} · {selected.county}</div>
-              <div style={{ marginBottom: 10 }}><FreshnessTag dateStr={selected.latestPrice?.scraped_at} /></div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <FreshnessTag dateStr={selected.latestPrice?.scraped_at} />
+                <ConfidenceDots confidence={selected.latestPrice?.confidence ?? 3} />
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
                 <div style={{ padding: 10, borderRadius: 7, border: '1px solid #e5e7eb', background: '#f9fafb', textAlign: 'center' }}>
                   <div style={{ fontSize: 10, textTransform: 'uppercase', color: '#9ca3af', letterSpacing: '0.4px', marginBottom: 3 }}>Petrol</div>
@@ -421,20 +497,33 @@ export default function Home() {
                   </div>
                 </div>
               </div>
-              <div style={{ fontSize: 12, borderTop: '1px solid #f3f4f6', paddingTop: 8 }}>
+              <div style={{ fontSize: 12, borderTop: '1px solid #f3f4f6', paddingTop: 8, marginBottom: 10 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: '#9ca3af' }}>Address</span><span>{selected.address}</span></div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: '#9ca3af' }}>County</span><span>{selected.county}</span></div>
-                {userPos && <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: '#9ca3af' }}>Distance</span><span>{dist(userPos, selected).toFixed(1)} km</span></div>}
+                {userPos && <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: '#9ca3af' }}>Distance</span><span>{distKm(userPos, selected).toFixed(1)} km</span></div>}
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: '#9ca3af' }}>Source</span><span>{selected.latestPrice?.source}</span></div>
               </div>
+              <button
+                onClick={() => handleConfirm(selected)}
+                disabled={confirming === selected.id}
+                style={{ width: '100%', padding: 9, background: '#16a34a', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer', marginBottom: 6 }}
+              >
+                {confirming === selected.id ? 'Confirming...' : 'Confirm prices are correct'}
+              </button>
               <button onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${selected.lat},${selected.lng}`, '_blank')}
-                style={{ width: '100%', padding: 9, background: '#1d4ed8', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer', marginTop: 10 }}>
+                style={{ width: '100%', padding: 9, background: '#1d4ed8', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer', marginBottom: 6 }}>
                 Navigate →
               </button>
-              <button onClick={() => { setReportModal(selected); setReportForm({}) }}
-                style={{ width: '100%', padding: 7, background: '#f9fafb', color: '#6b7280', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 12, cursor: 'pointer', marginTop: 6 }}>
-                Submit price update
-              </button>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => { setReportModal(selected); setReportType('price_update'); setReportForm({}) }}
+                  style={{ flex: 1, padding: 7, background: '#f9fafb', color: '#374151', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 12, cursor: 'pointer' }}>
+                  Update price
+                </button>
+                <button onClick={() => { setReportModal(selected); setReportType('incorrect_price'); setReportForm({}) }}
+                  style={{ flex: 1, padding: 7, background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 7, fontSize: 12, cursor: 'pointer' }}>
+                  Report error
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -446,7 +535,6 @@ export default function Home() {
           background: '#fff', borderTop: '1px solid #e5e7eb',
           flexDirection: 'column', zIndex: 600,
         }}>
-          {/* Pull-up handle */}
           <div
             onClick={() => setMobileListOpen(v => !v)}
             style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
@@ -454,17 +542,13 @@ export default function Home() {
             <div style={{ display: 'flex', gap: 16 }}>
               <div>
                 <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#6b7280', letterSpacing: '0.4px' }}>Cheapest petrol</div>
-                <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace', color: '#16a34a' }}>
-                  {cheapest.cheapestPetrol ? `€${Number(cheapest.cheapestPetrol.petrol_price).toFixed(3)}` : '—'}
-                </div>
+                <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace', color: '#16a34a' }}>{cheapest.cheapestPetrol ? `€${Number(cheapest.cheapestPetrol.petrol_price).toFixed(3)}` : '—'}</div>
                 <div style={{ fontSize: 10, color: '#9ca3af' }}>{cheapest.cheapestPetrol?.town ?? '—'}</div>
               </div>
               <div style={{ width: 1, background: '#e5e7eb' }} />
               <div>
                 <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#6b7280', letterSpacing: '0.4px' }}>Cheapest diesel</div>
-                <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace', color: '#d97706' }}>
-                  {cheapest.cheapestDiesel ? `€${Number(cheapest.cheapestDiesel.diesel_price).toFixed(3)}` : '—'}
-                </div>
+                <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace', color: '#d97706' }}>{cheapest.cheapestDiesel ? `€${Number(cheapest.cheapestDiesel.diesel_price).toFixed(3)}` : '—'}</div>
                 <div style={{ fontSize: 10, color: '#9ca3af' }}>{cheapest.cheapestDiesel?.town ?? '—'}</div>
               </div>
             </div>
@@ -474,9 +558,8 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Expandable station list */}
           {mobileListOpen && (
-            <div style={{ maxHeight: '50vh', overflowY: 'auto', padding: '0 8px 8px', borderTop: '1px solid #f3f4f6' }}>
+            <div style={{ maxHeight: '55vh', overflowY: 'auto', padding: '0 8px 8px', borderTop: '1px solid #f3f4f6' }}>
               <div style={{ display: 'flex', gap: 5, padding: '8px 4px', flexWrap: 'wrap' }}>
                 {['all', 'petrol', 'diesel'].map(f => (
                   <button key={f} onClick={() => setFuelFilter(f)} style={{ padding: '4px 12px', borderRadius: 20, border: '1px solid', fontSize: 12, cursor: 'pointer', background: fuelFilter === f ? '#1d4ed8' : '#f9fafb', color: fuelFilter === f ? 'white' : '#6b7280', borderColor: fuelFilter === f ? '#1d4ed8' : '#e5e7eb' }}>
@@ -487,12 +570,7 @@ export default function Home() {
                   Available
                 </button>
               </div>
-              <input
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Search..."
-                style={{ width: '100%', padding: '8px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, outline: 'none', marginBottom: 6, boxSizing: 'border-box' }}
-              />
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..." style={{ width: '100%', padding: '8px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, outline: 'none', marginBottom: 6, boxSizing: 'border-box' }} />
               {filtered.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: '#9ca3af' }}>No stations match.</div>}
               {filtered.map(s => <StationCard key={s.id} s={s} />)}
             </div>
@@ -500,23 +578,58 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Report modal */}
+      {/* Report / update modal */}
       {reportModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end', padding: 16 }}>
-          <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', width: 300, padding: 16 }}>
-            <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 12 }}>Update: {reportModal.name}</div>
-            {submitMsg ? (
-              <div style={{ padding: '10px 0', textAlign: 'center', color: submitMsg.includes('Thank') ? '#16a34a' : '#dc2626', fontWeight: 500 }}>{submitMsg}</div>
+          <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', width: 310, padding: 16 }}>
+            <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>
+              {reportType === 'incorrect_price' ? 'Report incorrect price' : 'Update prices'}
+            </div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>{reportModal.name} · {reportModal.county}</div>
+
+            {submitResult ? (
+              <div>
+                {submitResult.error ? (
+                  <div style={{ color: '#dc2626', fontSize: 13, textAlign: 'center', padding: '8px 0' }}>{submitResult.error}</div>
+                ) : (
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 14, fontWeight: 500, color: '#16a34a', marginBottom: 6 }}>Submitted — thanks!</div>
+                    {submitResult.impact && (
+                      <div style={{ fontSize: 12, color: '#374151', background: '#f0fdf4', borderRadius: 7, padding: '8px 10px', marginBottom: 8 }}>
+                        {submitResult.impact.message}
+                      </div>
+                    )}
+                    {submitResult.contributor && (
+                      <div style={{ fontSize: 11, color: '#6b7280' }}>
+                        Your score: {submitResult.contributor.score} · {submitResult.contributor.submissions} updates
+                        {submitResult.contributor.streak_days > 1 && ` · ${submitResult.contributor.streak_days} day streak`}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             ) : (
               <>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+                  {['price_update', 'incorrect_price'].map(t => (
+                    <button key={t} onClick={() => setReportType(t)} style={{ flex: 1, padding: '6px 0', borderRadius: 7, border: '1px solid', fontSize: 12, cursor: 'pointer', background: reportType === t ? (t === 'incorrect_price' ? '#fef2f2' : '#eff6ff') : '#f9fafb', color: reportType === t ? (t === 'incorrect_price' ? '#b91c1c' : '#1d4ed8') : '#6b7280', borderColor: reportType === t ? (t === 'incorrect_price' ? '#fecaca' : '#bfdbfe') : '#e5e7eb' }}>
+                      {t === 'price_update' ? 'Update price' : 'Report error'}
+                    </button>
+                  ))}
+                </div>
+
                 <label style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 3 }}>Petrol price (€/L)</label>
-                <input type="number" step="0.001" placeholder={`Current: €${Number(reportModal.latestPrice?.petrol_price ?? 0).toFixed(3)}`}
+                <input type="number" step="0.001"
+                  placeholder={`Current: €${Number(reportModal.latestPrice?.petrol_price ?? 0).toFixed(3)}`}
                   onChange={e => setReportForm(f => ({ ...f, petrol_price: e.target.value }))}
                   style={{ width: '100%', padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, marginBottom: 8, boxSizing: 'border-box' }} />
+
                 <label style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 3 }}>Diesel price (€/L)</label>
-                <input type="number" step="0.001" placeholder={`Current: €${Number(reportModal.latestPrice?.diesel_price ?? 0).toFixed(3)}`}
+                <input type="number" step="0.001"
+                  placeholder={`Current: €${Number(reportModal.latestPrice?.diesel_price ?? 0).toFixed(3)}`}
                   onChange={e => setReportForm(f => ({ ...f, diesel_price: e.target.value }))}
                   style={{ width: '100%', padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, marginBottom: 8, boxSizing: 'border-box' }} />
+
                 <label style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 3 }}>Petrol availability</label>
                 <select onChange={e => setReportForm(f => ({ ...f, petrol_status: e.target.value }))}
                   style={{ width: '100%', padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, marginBottom: 8 }}>
@@ -524,6 +637,7 @@ export default function Home() {
                   <option value="unavailable">Unavailable</option>
                   <option value="unknown">Unknown</option>
                 </select>
+
                 <label style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 3 }}>Diesel availability</label>
                 <select onChange={e => setReportForm(f => ({ ...f, diesel_status: e.target.value }))}
                   style={{ width: '100%', padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, marginBottom: 12 }}>
@@ -531,9 +645,14 @@ export default function Home() {
                   <option value="unavailable">Unavailable</option>
                   <option value="unknown">Unknown</option>
                 </select>
+
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <button onClick={() => setReportModal(null)} style={{ flex: 1, padding: 8, background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, cursor: 'pointer', color: '#6b7280' }}>Cancel</button>
-                  <button onClick={submitReport} disabled={submitting} style={{ flex: 1, padding: 8, background: '#16a34a', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer', color: 'white' }}>
+                  <button onClick={() => { setReportModal(null); setSubmitResult(null) }}
+                    style={{ flex: 1, padding: 8, background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, cursor: 'pointer', color: '#6b7280' }}>
+                    Cancel
+                  </button>
+                  <button onClick={submitReport} disabled={submitting}
+                    style={{ flex: 1, padding: 8, background: reportType === 'incorrect_price' ? '#dc2626' : '#16a34a', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer', color: 'white' }}>
                     {submitting ? 'Submitting...' : 'Submit'}
                   </button>
                 </div>
