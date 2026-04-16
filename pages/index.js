@@ -31,12 +31,8 @@ function freshnessState(dateStr) {
 function AvailabilityDot({ status, size = 8 }) {
   return (
     <span style={{
-      display: 'inline-block',
-      width: size,
-      height: size,
-      borderRadius: '50%',
-      background: STATUS_COLOR[status ?? 'unknown'],
-      flexShrink: 0,
+      display: 'inline-block', width: size, height: size,
+      borderRadius: '50%', background: STATUS_COLOR[status ?? 'unknown'], flexShrink: 0,
     }} />
   )
 }
@@ -50,15 +46,7 @@ function FreshnessTag({ dateStr }) {
   }
   const c = colors[state]
   return (
-    <span style={{
-      fontSize: 10,
-      padding: '2px 6px',
-      borderRadius: 4,
-      background: c.bg,
-      color: c.text,
-      fontFamily: 'monospace',
-      whiteSpace: 'nowrap',
-    }}>
+    <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: c.bg, color: c.text, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
       {state === 'stale' ? 'may be outdated' : timeAgo(dateStr)}
     </span>
   )
@@ -104,6 +92,10 @@ export default function Home() {
   const [search, setSearch] = useState('')
   const [userPos, setUserPos] = useState(null)
   const [mobileListOpen, setMobileListOpen] = useState(false)
+  const [locating, setLocating] = useState(false)
+  const [locateError, setLocateError] = useState(null)
+  const [searching, setSearching] = useState(false)
+  const [searchGeoResult, setSearchGeoResult] = useState(null)
 
   const [reportModal, setReportModal] = useState(null)
   const [reportType, setReportType] = useState('price_update')
@@ -114,7 +106,6 @@ export default function Home() {
   const [geofencePrompt, setGeofencePrompt] = useState(null)
   const [confirming, setConfirming] = useState(null)
   const [confirmResult, setConfirmResult] = useState(null)
-
   const [contributorBadge, setContributorBadge] = useState(null)
 
   useEffect(() => {
@@ -122,13 +113,10 @@ export default function Home() {
     fetch('/api/cheapest').then(r => r.json()).then(setCheapest)
   }, [])
 
-  // Geofence check — if user is within 300m of a station, prompt to confirm
   useEffect(() => {
     if (!userPos || !stations.length) return
     const nearby = stations.filter(s => distKm(userPos, s) < 0.3)
-    if (nearby.length > 0 && !geofencePrompt) {
-      setGeofencePrompt(nearby[0])
-    }
+    if (nearby.length > 0 && !geofencePrompt) setGeofencePrompt(nearby[0])
   }, [userPos, stations])
 
   useEffect(() => {
@@ -172,12 +160,15 @@ export default function Home() {
 
   const getFiltered = useCallback(() => {
     let list = [...stations]
-    if (search) {
+    // If search has a geocoded result but no local station matches, show all
+    if (search && !searchGeoResult) {
       const q = search.toLowerCase()
       list = list.filter(s =>
         s.name.toLowerCase().includes(q) ||
         s.town.toLowerCase().includes(q) ||
-        s.county.toLowerCase().includes(q)
+        s.county.toLowerCase().includes(q) ||
+        s.address?.toLowerCase().includes(q) ||
+        s.brand?.toLowerCase().includes(q)
       )
     }
     if (availOnly) {
@@ -199,19 +190,100 @@ export default function Home() {
       list.sort((a, b) => new Date(b.latestPrice?.scraped_at ?? 0) - new Date(a.latestPrice?.scraped_at ?? 0))
     }
     return list
-  }, [stations, search, availOnly, fuelFilter, sortBy, userPos])
+  }, [stations, search, searchGeoResult, availOnly, fuelFilter, sortBy, userPos])
 
-  const locateMe = () => {
-    if (!navigator.geolocation) return
-    navigator.geolocation.getCurrentPosition(pos => {
-      const { latitude: lat, longitude: lng } = pos.coords
-      setUserPos({ lat, lng })
-      setSortBy('distance')
-      map.current?.flyTo({ center: [lng, lat], zoom: 12 })
-      fetch(`/api/stations?lat=${lat}&lng=${lng}&radius=25000`)
-        .then(r => r.json()).then(setStations)
-    })
-  }
+  // Geocode search via Mapbox and load nearby stations
+  const geocodeSearch = useCallback(async (query) => {
+    if (!query || query.length < 2) return
+    setSearching(true)
+    setSearchGeoResult(null)
+    try {
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?country=ie&types=place,locality,neighborhood,address,poi&access_token=${process.env.NEXT_PUBLIC_MAPBOX_TOKEN}&limit=1`
+      const res = await fetch(url)
+      const data = await res.json()
+      const feature = data.features?.[0]
+      if (feature) {
+        const [lng, lat] = feature.center
+        setSearchGeoResult({ lat, lng, name: feature.place_name })
+        map.current?.flyTo({ center: [lng, lat], zoom: 11 })
+        // Load stations near this location
+        const stationsRes = await fetch(`/api/stations?lat=${lat}&lng=${lng}&radius=30000`)
+        const nearbyStations = await stationsRes.json()
+        if (Array.isArray(nearbyStations) && nearbyStations.length > 0) {
+          setStations(nearbyStations)
+          setSortBy('distance')
+          setUserPos({ lat, lng })
+        }
+      }
+    } catch (e) {
+      console.error('Geocode error:', e)
+    }
+    setSearching(false)
+  }, [])
+
+  // Debounce search — run geocoding after user stops typing for 600ms
+  const searchDebounceRef = useRef(null)
+  const handleSearchChange = useCallback((value) => {
+    setSearch(value)
+    setSearchGeoResult(null)
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    if (value.length >= 2) {
+      searchDebounceRef.current = setTimeout(() => geocodeSearch(value), 600)
+    }
+  }, [geocodeSearch])
+
+  const clearSearch = useCallback(() => {
+    setSearch('')
+    setSearchGeoResult(null)
+    setUserPos(null)
+    fetch('/api/stations').then(r => r.json()).then(setStations)
+    map.current?.flyTo({ center: [-8.0, 53.4], zoom: 6.5 })
+  }, [])
+
+  // iOS-safe geolocation — must be called synchronously in click handler
+  const locateMe = useCallback(() => {
+    setLocateError(null)
+    if (!navigator.geolocation) {
+      setLocateError('Geolocation is not supported by your browser.')
+      return
+    }
+    setLocating(true)
+    // Options tuned for mobile: high accuracy, 15s timeout, no cache
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude: lat, longitude: lng } = pos.coords
+        setUserPos({ lat, lng })
+        setSortBy('distance')
+        setLocating(false)
+        setLocateError(null)
+        map.current?.flyTo({ center: [lng, lat], zoom: 12 })
+        fetch(`/api/stations?lat=${lat}&lng=${lng}&radius=25000`)
+          .then(r => r.json())
+          .then(data => {
+            if (Array.isArray(data) && data.length > 0) {
+              setStations(data)
+            }
+          })
+      },
+      (err) => {
+        setLocating(false)
+        switch (err.code) {
+          case 1:
+            setLocateError('Location access denied. Please enable location permissions in your browser settings.')
+            break
+          case 2:
+            setLocateError('Could not determine your location. Please try again.')
+            break
+          case 3:
+            setLocateError('Location request timed out. Please try again.')
+            break
+          default:
+            setLocateError('Location unavailable. Please try again.')
+        }
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    )
+  }, [])
 
   const handleConfirm = async (station) => {
     setConfirming(station.id)
@@ -224,9 +296,7 @@ export default function Home() {
     setConfirming(null)
     setGeofencePrompt(null)
     setConfirmResult({
-      message: data.already_confirmed
-        ? 'Already confirmed recently — thanks!'
-        : data.message ?? 'Confirmed!',
+      message: data.already_confirmed ? 'Already confirmed recently — thanks!' : data.message ?? 'Confirmed!',
       county: station.county,
     })
     setTimeout(() => setConfirmResult(null), 4000)
@@ -296,7 +366,6 @@ export default function Home() {
             {isCheapestDiesel && <span style={{ fontSize: 10, background: '#fffbeb', color: '#b45309', padding: '1px 6px', borderRadius: 4, fontWeight: 500 }}>Cheapest diesel</span>}
           </div>
         </div>
-
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           {fuelFilter !== 'diesel' && (
             <div style={{ padding: '5px 9px', borderRadius: 6, border: `1px solid ${isCheapestPetrol ? '#16a34a' : '#e5e7eb'}`, background: isCheapestPetrol ? '#f0fdf4' : '#f9fafb', minWidth: 64, textAlign: 'center' }}>
@@ -328,6 +397,30 @@ export default function Home() {
       </div>
     )
   }
+
+  const SearchBar = ({ mobile = false }) => (
+    <div style={{ display: 'flex', gap: 6, position: 'relative' }}>
+      <div style={{ flex: 1, position: 'relative' }}>
+        <input
+          value={search}
+          onChange={e => handleSearchChange(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && geocodeSearch(search)}
+          placeholder="Search town, county, station..."
+          style={{ width: '100%', padding: '8px 32px 8px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
+        />
+        {search && (
+          <button onClick={clearSearch} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
+        )}
+      </div>
+      <button
+        onClick={locateMe}
+        disabled={locating}
+        style={{ padding: '8px 12px', background: locating ? '#93c5fd' : '#1d4ed8', color: 'white', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 500, cursor: locating ? 'wait' : 'pointer', whiteSpace: 'nowrap', minWidth: 80 }}
+      >
+        {locating ? 'Finding...' : 'Near me'}
+      </button>
+    </div>
+  )
 
   return (
     <>
@@ -392,10 +485,24 @@ export default function Home() {
               </button>
             </div>
 
-            <div style={{ display: 'flex', gap: 6 }}>
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search station, town, county..." style={{ flex: 1, padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, outline: 'none' }} />
-              <button onClick={locateMe} style={{ padding: '6px 11px', background: '#1d4ed8', color: 'white', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}>Near me</button>
-            </div>
+            <SearchBar />
+
+            {locateError && (
+              <div style={{ marginTop: 6, padding: '6px 10px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 11, color: '#b91c1c' }}>
+                {locateError}
+              </div>
+            )}
+
+            {searching && (
+              <div style={{ marginTop: 6, fontSize: 11, color: '#6b7280', textAlign: 'center' }}>Searching...</div>
+            )}
+
+            {searchGeoResult && (
+              <div style={{ marginTop: 6, padding: '5px 10px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 6, fontSize: 11, color: '#15803d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Showing stations near {search}</span>
+                <button onClick={clearSearch} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', fontSize: 13 }}>×</button>
+              </div>
+            )}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderBottom: '1px solid #e5e7eb', background: '#f9fafb' }}>
@@ -408,7 +515,12 @@ export default function Home() {
           </div>
 
           <div style={{ overflowY: 'auto', flex: 1, padding: 8 }}>
-            {filtered.length === 0 && <div style={{ padding: 32, textAlign: 'center', color: '#9ca3af' }}>No stations match your filters.</div>}
+            {filtered.length === 0 && !searching && (
+              <div style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>
+                <div style={{ fontSize: 13, marginBottom: 4 }}>No stations found near "{search}"</div>
+                <div style={{ fontSize: 11 }}>Try a different town or county</div>
+              </div>
+            )}
             {filtered.map(s => <StationCard key={s.id} s={s} />)}
           </div>
         </div>
@@ -417,7 +529,6 @@ export default function Home() {
         <div style={{ flex: 1, position: 'relative' }}>
           <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
 
-          {/* Cheapest banner — desktop */}
           <div className="desktop-sidebar" style={{ display: 'flex', position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 14px', gap: 14, zIndex: 500, whiteSpace: 'nowrap' }}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
               <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#6b7280', letterSpacing: '0.5px' }}>Cheapest petrol</div>
@@ -432,36 +543,25 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Geofence prompt */}
           {geofencePrompt && (
             <div style={{ position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)', background: '#fff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '12px 16px', zIndex: 600, minWidth: 280, textAlign: 'center' }}>
               <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>You're near {geofencePrompt.name}</div>
               <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>Are today's prices still correct?</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  onClick={() => handleConfirm(geofencePrompt)}
-                  disabled={confirming === geofencePrompt.id}
-                  style={{ flex: 1, padding: '8px 0', background: '#16a34a', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
-                >
+                <button onClick={() => handleConfirm(geofencePrompt)} disabled={confirming === geofencePrompt.id}
+                  style={{ flex: 1, padding: '8px 0', background: '#16a34a', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
                   {confirming === geofencePrompt.id ? 'Confirming...' : 'Yes, looks right'}
                 </button>
-                <button
-                  onClick={() => { setReportModal(geofencePrompt); setReportType('price_update'); setGeofencePrompt(null) }}
-                  style={{ flex: 1, padding: '8px 0', background: '#f9fafb', color: '#374151', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, cursor: 'pointer' }}
-                >
+                <button onClick={() => { setReportModal(geofencePrompt); setReportType('price_update'); setGeofencePrompt(null) }}
+                  style={{ flex: 1, padding: '8px 0', background: '#f9fafb', color: '#374151', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, cursor: 'pointer' }}>
                   Update price
                 </button>
-                <button
-                  onClick={() => setGeofencePrompt(null)}
-                  style={{ padding: '8px 10px', background: 'transparent', color: '#9ca3af', border: 'none', cursor: 'pointer', fontSize: 13 }}
-                >
-                  ✕
-                </button>
+                <button onClick={() => setGeofencePrompt(null)}
+                  style={{ padding: '8px 10px', background: 'transparent', color: '#9ca3af', border: 'none', cursor: 'pointer', fontSize: 13 }}>✕</button>
               </div>
             </div>
           )}
 
-          {/* Confirm result toast */}
           {confirmResult && (
             <div style={{ position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 10, padding: '10px 16px', zIndex: 600, textAlign: 'center', whiteSpace: 'nowrap' }}>
               <div style={{ fontSize: 13, fontWeight: 500, color: '#15803d' }}>{confirmResult.message}</div>
@@ -469,7 +569,6 @@ export default function Home() {
             </div>
           )}
 
-          {/* Station detail panel */}
           {selected && (
             <div style={{ position: 'absolute', bottom: 0, right: 0, width: 300, background: '#fff', borderTop: '1px solid #e5e7eb', borderLeft: '1px solid #e5e7eb', borderRadius: '10px 0 0 0', padding: 16, zIndex: 10 }}>
               <button onClick={() => setSelected(null)} style={{ position: 'absolute', top: 10, right: 10, background: '#f3f4f6', border: 'none', borderRadius: 5, width: 22, height: 22, cursor: 'pointer', fontSize: 14, color: '#6b7280' }}>×</button>
@@ -503,11 +602,8 @@ export default function Home() {
                 {userPos && <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: '#9ca3af' }}>Distance</span><span>{distKm(userPos, selected).toFixed(1)} km</span></div>}
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: '#9ca3af' }}>Source</span><span>{selected.latestPrice?.source}</span></div>
               </div>
-              <button
-                onClick={() => handleConfirm(selected)}
-                disabled={confirming === selected.id}
-                style={{ width: '100%', padding: 9, background: '#16a34a', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer', marginBottom: 6 }}
-              >
+              <button onClick={() => handleConfirm(selected)} disabled={confirming === selected.id}
+                style={{ width: '100%', padding: 9, background: '#16a34a', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer', marginBottom: 6 }}>
                 {confirming === selected.id ? 'Confirming...' : 'Confirm prices are correct'}
               </button>
               <button onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${selected.lat},${selected.lng}`, '_blank')}
@@ -529,16 +625,8 @@ export default function Home() {
         </div>
 
         {/* MOBILE STICKY BOTTOM BAR */}
-        <div className="mobile-bar" style={{
-          display: 'none',
-          position: 'absolute', bottom: 0, left: 0, right: 0,
-          background: '#fff', borderTop: '1px solid #e5e7eb',
-          flexDirection: 'column', zIndex: 600,
-        }}>
-          <div
-            onClick={() => setMobileListOpen(v => !v)}
-            style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
-          >
+        <div className="mobile-bar" style={{ display: 'none', position: 'absolute', bottom: 0, left: 0, right: 0, background: '#fff', borderTop: '1px solid #e5e7eb', flexDirection: 'column', zIndex: 600 }}>
+          <div onClick={() => setMobileListOpen(v => !v)} style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
             <div style={{ display: 'flex', gap: 16 }}>
               <div>
                 <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#6b7280', letterSpacing: '0.4px' }}>Cheapest petrol</div>
@@ -552,15 +640,37 @@ export default function Home() {
                 <div style={{ fontSize: 10, color: '#9ca3af' }}>{cheapest.cheapestDiesel?.town ?? '—'}</div>
               </div>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-              <button onClick={e => { e.stopPropagation(); locateMe() }} style={{ padding: '6px 12px', background: '#1d4ed8', color: 'white', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 500, cursor: 'pointer' }}>Near me</button>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+              <button
+                onClick={e => { e.stopPropagation(); locateMe() }}
+                disabled={locating}
+                style={{ padding: '8px 14px', background: locating ? '#93c5fd' : '#1d4ed8', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: locating ? 'wait' : 'pointer', minWidth: 90 }}
+              >
+                {locating ? 'Finding...' : 'Near me'}
+              </button>
               <div style={{ fontSize: 10, color: '#9ca3af' }}>{mobileListOpen ? '▼ Hide' : '▲ Stations'}</div>
             </div>
           </div>
 
+          {locateError && (
+            <div style={{ margin: '0 12px 8px', padding: '6px 10px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 11, color: '#b91c1c' }}>
+              {locateError}
+            </div>
+          )}
+
           {mobileListOpen && (
             <div style={{ maxHeight: '55vh', overflowY: 'auto', padding: '0 8px 8px', borderTop: '1px solid #f3f4f6' }}>
-              <div style={{ display: 'flex', gap: 5, padding: '8px 4px', flexWrap: 'wrap' }}>
+              <div style={{ padding: '8px 4px' }}>
+                <SearchBar mobile />
+                {searching && <div style={{ fontSize: 11, color: '#6b7280', textAlign: 'center', marginTop: 4 }}>Searching...</div>}
+                {searchGeoResult && (
+                  <div style={{ marginTop: 6, padding: '5px 10px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 6, fontSize: 11, color: '#15803d', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Stations near {search}</span>
+                    <button onClick={clearSearch} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}>×</button>
+                  </div>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 5, padding: '4px', flexWrap: 'wrap' }}>
                 {['all', 'petrol', 'diesel'].map(f => (
                   <button key={f} onClick={() => setFuelFilter(f)} style={{ padding: '4px 12px', borderRadius: 20, border: '1px solid', fontSize: 12, cursor: 'pointer', background: fuelFilter === f ? '#1d4ed8' : '#f9fafb', color: fuelFilter === f ? 'white' : '#6b7280', borderColor: fuelFilter === f ? '#1d4ed8' : '#e5e7eb' }}>
                     {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
@@ -570,15 +680,19 @@ export default function Home() {
                   Available
                 </button>
               </div>
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..." style={{ width: '100%', padding: '8px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, outline: 'none', marginBottom: 6, boxSizing: 'border-box' }} />
-              {filtered.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: '#9ca3af' }}>No stations match.</div>}
+              {filtered.length === 0 && !searching && (
+                <div style={{ padding: 20, textAlign: 'center', color: '#9ca3af' }}>
+                  <div style={{ fontSize: 13 }}>No stations found near "{search}"</div>
+                  <div style={{ fontSize: 11, marginTop: 4 }}>Try a different town or county name</div>
+                </div>
+              )}
               {filtered.map(s => <StationCard key={s.id} s={s} />)}
             </div>
           )}
         </div>
       </div>
 
-      {/* Report / update modal */}
+      {/* Report modal */}
       {reportModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end', padding: 16 }}>
           <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', width: 310, padding: 16 }}>
@@ -586,7 +700,6 @@ export default function Home() {
               {reportType === 'incorrect_price' ? 'Report incorrect price' : 'Update prices'}
             </div>
             <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>{reportModal.name} · {reportModal.county}</div>
-
             {submitResult ? (
               <div>
                 {submitResult.error ? (
@@ -617,19 +730,14 @@ export default function Home() {
                     </button>
                   ))}
                 </div>
-
                 <label style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 3 }}>Petrol price (€/L)</label>
-                <input type="number" step="0.001"
-                  placeholder={`Current: €${Number(reportModal.latestPrice?.petrol_price ?? 0).toFixed(3)}`}
+                <input type="number" step="0.001" placeholder={`Current: €${Number(reportModal.latestPrice?.petrol_price ?? 0).toFixed(3)}`}
                   onChange={e => setReportForm(f => ({ ...f, petrol_price: e.target.value }))}
                   style={{ width: '100%', padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, marginBottom: 8, boxSizing: 'border-box' }} />
-
                 <label style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 3 }}>Diesel price (€/L)</label>
-                <input type="number" step="0.001"
-                  placeholder={`Current: €${Number(reportModal.latestPrice?.diesel_price ?? 0).toFixed(3)}`}
+                <input type="number" step="0.001" placeholder={`Current: €${Number(reportModal.latestPrice?.diesel_price ?? 0).toFixed(3)}`}
                   onChange={e => setReportForm(f => ({ ...f, diesel_price: e.target.value }))}
                   style={{ width: '100%', padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, marginBottom: 8, boxSizing: 'border-box' }} />
-
                 <label style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 3 }}>Petrol availability</label>
                 <select onChange={e => setReportForm(f => ({ ...f, petrol_status: e.target.value }))}
                   style={{ width: '100%', padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, marginBottom: 8 }}>
@@ -637,7 +745,6 @@ export default function Home() {
                   <option value="unavailable">Unavailable</option>
                   <option value="unknown">Unknown</option>
                 </select>
-
                 <label style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 3 }}>Diesel availability</label>
                 <select onChange={e => setReportForm(f => ({ ...f, diesel_status: e.target.value }))}
                   style={{ width: '100%', padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, marginBottom: 12 }}>
@@ -645,7 +752,6 @@ export default function Home() {
                   <option value="unavailable">Unavailable</option>
                   <option value="unknown">Unknown</option>
                 </select>
-
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button onClick={() => { setReportModal(null); setSubmitResult(null) }}
                     style={{ flex: 1, padding: 8, background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, cursor: 'pointer', color: '#6b7280' }}>
