@@ -1,15 +1,10 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import Head from 'next/head'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
+import { IRISH_COUNTIES } from '../lib/counties'
 
 mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
-
-const STATUS_COLOR = {
-  available: '#16a34a',
-  unavailable: '#dc2626',
-  unknown: '#d97706',
-}
 
 function timeAgo(dateStr) {
   if (!dateStr) return 'unknown'
@@ -28,44 +23,37 @@ function freshnessState(dateStr) {
   return 'stale'
 }
 
-function AvailabilityDot({ status, size = 8 }) {
-  return (
-    <span style={{
-      display: 'inline-block', width: size, height: size,
-      borderRadius: '50%', background: STATUS_COLOR[status ?? 'unknown'], flexShrink: 0,
-    }} />
-  )
+function getPriceColor(price) {
+  if (!price) return '#475569'
+  // Tiers calibrated to actual Irish retail spread (~€1.84–1.97 petrol)
+  // Compresses the range so colours are meaningfully differentiated
+  if (price < 1.87) return '#22c55e'
+  if (price < 1.91) return '#84cc16'
+  if (price < 1.95) return '#fbbf24'
+  if (price < 1.99) return '#f59e0b'
+  return '#ef4444'
 }
 
-function FreshnessTag({ dateStr }) {
-  const state = freshnessState(dateStr)
-  const colors = {
-    fresh: { bg: '#f0fdf4', text: '#15803d' },
-    aging: { bg: '#fffbeb', text: '#b45309' },
-    stale: { bg: '#fef2f2', text: '#b91c1c' },
+function getPrice(station, fuelType) {
+  return station.prices?.find(p => p.fuel_type === fuelType) ?? null
+}
+
+function getPriceValue(station, fuelType) {
+  return getPrice(station, fuelType)?.price ?? null
+}
+
+function getReportedAt(station, fuelType) {
+  return getPrice(station, fuelType)?.reported_at ?? null
+}
+
+function normaliseStation(s) {
+  return {
+    ...s,
+    petrolPrice: getPriceValue(s, 'petrol'),
+    dieselPrice: getPriceValue(s, 'diesel'),
+    reportedAt: getReportedAt(s, 'petrol') ?? getReportedAt(s, 'diesel'),
+    source: getPrice(s, 'petrol')?.source ?? getPrice(s, 'diesel')?.source ?? null,
   }
-  const c = colors[state]
-  return (
-    <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: c.bg, color: c.text, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-      {state === 'stale' ? 'may be outdated' : timeAgo(dateStr)}
-    </span>
-  )
-}
-
-function ConfidenceDots({ confidence = 3 }) {
-  const score = Math.round(confidence)
-  return (
-    <span style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-      {[1, 2, 3, 4, 5].map(i => (
-        <span key={i} style={{
-          width: 5, height: 5, borderRadius: '50%',
-          background: i <= score
-            ? score >= 4 ? '#16a34a' : score >= 2 ? '#d97706' : '#dc2626'
-            : '#e5e7eb',
-        }} />
-      ))}
-    </span>
-  )
 }
 
 function distKm(pos, s) {
@@ -78,16 +66,341 @@ function distKm(pos, s) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
+// Brand colour map — matched against brand name substring (case-insensitive)
+// Based on actual brand data: Circle K (317), Top (202), Applegreen (165),
+// Texaco (151), Maxol (141), Inver (55), Emo (54), Certa (28), Esso (27), etc.
+const BRAND_COLORS = {
+  'circle k':    '#E31837',
+  'applegreen':  '#00843D',
+  'texaco':      '#E4002B',
+  'maxol':       '#E4002B',
+  'inver':       '#0071BC',
+  'emo':         '#003DA5',
+  'certa':       '#00529B',
+  'esso':        '#0033A0',
+  'amber':       '#F59E0B',
+  'topaz':       '#E8A020',
+  'top':         '#F68B1F',
+  'campus':      '#6B7280',
+  'go':          '#10B981',
+  'greatgas':    '#16A34A',
+  'morris':      '#78350F',
+  'corrib':      '#1D4ED8',
+  'tara':        '#7C3AED',
+  'swift':       '#0EA5E9',
+  'independent': '#475569',
+  'estuary':     '#0369A1',
+  'tesco':       '#EF4444',
+  'smart pump':  '#64748B',
+  'sweeney':     '#92400E',
+  'shell':       '#F7C600',
+  'drive':       '#8B5CF6',
+  'gulf':        '#FF6B00',
+  "o'reilly":    '#B45309',
+}
+
+function getBrandColor(brand) {
+  if (!brand) return '#334155'
+  const lower = brand.toLowerCase()
+  for (const [key, color] of Object.entries(BRAND_COLORS)) {
+    if (lower.includes(key)) return color
+  }
+  return '#334155'
+}
+
+function FreshnessDot({ dateStr }) {
+  const state = freshnessState(dateStr)
+  const config = {
+    fresh: { color: '#22c55e', label: timeAgo(dateStr) },
+    aging: { color: '#f59e0b', label: timeAgo(dateStr) },
+    stale: { color: '#ef4444', label: 'outdated' },
+  }
+  const { color, label } = config[state]
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: '#94a3b8', whiteSpace: 'nowrap' }}>
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0, boxShadow: `0 0 4px ${color}` }} />
+      {label}
+    </span>
+  )
+}
+
+function SearchBar({ search, onSearchChange, onSearchEnter, onClear, onLocate, locating }) {
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <div style={{ flex: 1, position: 'relative' }}>
+        <svg style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: '#475569', pointerEvents: 'none' }} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input
+          value={search}
+          onChange={e => onSearchChange(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && onSearchEnter(search)}
+          placeholder="Search station, town, county..."
+          style={{ width: '100%', padding: '8px 28px 8px 28px', border: '1px solid #334155', borderRadius: 6, fontSize: 12, outline: 'none', boxSizing: 'border-box', background: '#1e293b', color: '#e2e8f0', fontFamily: 'inherit' }}
+        />
+        {search && (
+          <button onClick={onClear} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#475569', fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
+        )}
+      </div>
+      <button onClick={onLocate} disabled={locating}
+        style={{ padding: '8px 12px', background: locating ? '#1e40af' : '#2563eb', color: 'white', border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: locating ? 'wait' : 'pointer', whiteSpace: 'nowrap', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+        {locating ? '...' : '⊕ Near me'}
+      </button>
+    </div>
+  )
+}
+
+function CountySelect({ value, onChange, countyCounts }) {
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      style={{ width: '100%', padding: '8px 10px', border: '1px solid #334155', borderRadius: 6, fontSize: 12, background: '#1e293b', color: value ? '#e2e8f0' : '#64748b', outline: 'none', fontFamily: 'inherit' }}
+    >
+      <option value="">All counties</option>
+      <optgroup label="Republic of Ireland">
+        {IRISH_COUNTIES.slice(0, 26).map(c => (
+          <option key={c} value={c}>{c}{countyCounts[c] ? ` (${countyCounts[c]})` : ''}</option>
+        ))}
+      </optgroup>
+      <optgroup label="Northern Ireland">
+        {IRISH_COUNTIES.slice(26).map(c => (
+          <option key={c} value={c}>{c}{countyCounts[c] ? ` (${countyCounts[c]})` : ''}</option>
+        ))}
+      </optgroup>
+    </select>
+  )
+}
+
+function StationCard({ s, isSelected, isCheapestPetrol, isCheapestDiesel, fuelFilter, userPos, onClick }) {
+  const freshness = freshnessState(s.reportedAt)
+  const hasAnyPrice = s.petrolPrice != null || s.dieselPrice != null
+  const brandColor = getBrandColor(s.brand)
+  const petrolColor = getPriceColor(s.petrolPrice)
+  const dieselColor = getPriceColor(s.dieselPrice)
+  const isStale = freshness === 'stale'
+  const isAging = freshness === 'aging'
+
+  const distStr = userPos
+    ? s.distance_metres != null
+      ? s.distance_metres < 1000
+        ? `${Math.round(s.distance_metres)}m`
+        : `${(s.distance_metres / 1000).toFixed(1)}km`
+      : `${distKm(userPos, s).toFixed(1)}km`
+    : null
+
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        marginBottom: 4,
+        borderRadius: 8,
+        border: `1px solid ${isSelected ? '#3b82f6' : '#1e293b'}`,
+        background: isSelected ? 'rgba(59,130,246,0.07)' : '#0f172a',
+        cursor: 'pointer',
+        overflow: 'hidden',
+        opacity: isStale && hasAnyPrice ? 0.7 : 1,
+        transition: 'border-color 0.15s, background 0.15s, opacity 0.15s',
+      }}
+      onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}
+      onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = '#0f172a' }}
+    >
+      {/* Stale data — full-width amber warning banner */}
+      {isStale && hasAnyPrice && (
+        <div style={{
+          background: '#431407',
+          borderBottom: '1px solid #7c2d12',
+          padding: '4px 12px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+        }}>
+          <span style={{ fontSize: 9, color: '#fb923c', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+            ⚠ Price may be outdated · {timeAgo(s.reportedAt)}
+          </span>
+        </div>
+      )}
+
+      {/* Aging — subtle amber stripe */}
+      {isAging && hasAnyPrice && (
+        <div style={{
+          background: '#1c1505',
+          borderBottom: '1px solid #1f1a05',
+          padding: '3px 12px',
+        }}>
+          <span style={{ fontSize: 9, color: '#78560a', letterSpacing: '0.04em' }}>
+            Updated {timeAgo(s.reportedAt)}
+          </span>
+        </div>
+      )}
+
+      {/* Card body */}
+      <div style={{ display: 'flex', alignItems: 'stretch', padding: '12px 12px 12px 10px', gap: 10 }}>
+
+        {/* Brand colour bar */}
+        <div style={{
+          width: 3,
+          borderRadius: 2,
+          background: brandColor,
+          flexShrink: 0,
+          alignSelf: 'stretch',
+          minHeight: 40,
+          opacity: isSelected ? 1 : 0.85,
+        }} />
+
+        {/* Content */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+
+          {/* Top row: name + distance/freshness */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{
+                fontWeight: 600,
+                fontSize: 13,
+                color: isSelected ? '#93c5fd' : '#f1f5f9',
+                lineHeight: 1.2,
+                letterSpacing: '-0.01em',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}>
+                {s.name}
+              </div>
+              <div style={{ fontSize: 10, color: '#334155', marginTop: 2, fontWeight: 500, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                {s.county}
+                {s.brand && s.brand.toLowerCase() !== s.name.toLowerCase() && (
+                  <span style={{ color: '#1e3a5f', fontWeight: 400 }}> · {s.brand}</span>
+                )}
+              </div>
+            </div>
+
+            {/* Distance + freshness dot */}
+            <div style={{ flexShrink: 0, marginLeft: 8, textAlign: 'right' }}>
+              {distStr && (
+                <div style={{ fontSize: 11, color: '#475569', fontFamily: '"DM Mono", monospace', lineHeight: 1.2 }}>
+                  {distStr}
+                </div>
+              )}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 3, marginTop: 3 }}>
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                  background: freshness === 'fresh' ? '#22c55e' : freshness === 'aging' ? '#f59e0b' : '#ef4444',
+                  boxShadow: freshness === 'fresh' ? '0 0 4px #22c55e' : 'none',
+                }} />
+                {freshness === 'fresh' && (
+                  <span style={{ fontSize: 9, color: '#22c55e' }}>{timeAgo(s.reportedAt)}</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Price blocks — or no-data state */}
+          {hasAnyPrice ? (
+            <div style={{ display: 'flex', gap: 6 }}>
+              {fuelFilter !== 'diesel' && (
+                <div style={{
+                  flex: 1,
+                  padding: '6px 8px',
+                  borderRadius: 6,
+                  background: '#080f1e',
+                  border: `1px solid ${isCheapestPetrol ? '#16a34a55' : '#1a2744'}`,
+                  textAlign: 'center',
+                }}>
+                  <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 3, fontWeight: 600 }}>Petrol</div>
+                  <div style={{ fontSize: 17, fontWeight: 700, fontFamily: '"DM Mono", "Courier New", monospace', color: s.petrolPrice ? petrolColor : '#1e3a5f', lineHeight: 1, letterSpacing: '-0.02em' }}>
+                    {s.petrolPrice ? `€${Number(s.petrolPrice).toFixed(3)}` : '—'}
+                  </div>
+                  {isCheapestPetrol && (
+                    <div style={{ fontSize: 8, color: '#16a34a', marginTop: 3, letterSpacing: '0.06em', fontWeight: 700 }}>CHEAPEST</div>
+                  )}
+                </div>
+              )}
+              {fuelFilter !== 'petrol' && (
+                <div style={{
+                  flex: 1,
+                  padding: '6px 8px',
+                  borderRadius: 6,
+                  background: '#080f1e',
+                  border: `1px solid ${isCheapestDiesel ? '#d9770655' : '#1a2744'}`,
+                  textAlign: 'center',
+                }}>
+                  <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 3, fontWeight: 600 }}>Diesel</div>
+                  <div style={{ fontSize: 17, fontWeight: 700, fontFamily: '"DM Mono", "Courier New", monospace', color: s.dieselPrice ? dieselColor : '#1e3a5f', lineHeight: 1, letterSpacing: '-0.02em' }}>
+                    {s.dieselPrice ? `€${Number(s.dieselPrice).toFixed(3)}` : '—'}
+                  </div>
+                  {isCheapestDiesel && (
+                    <div style={{ fontSize: 8, color: '#d97706', marginTop: 3, letterSpacing: '0.06em', fontWeight: 700 }}>CHEAPEST</div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            /* No price data state */
+            <div style={{
+              padding: '7px 10px',
+              borderRadius: 6,
+              background: '#080f1e',
+              border: '1px solid #1a2744',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}>
+              <span style={{ fontSize: 11, color: '#334155' }}>No price data</span>
+              <span style={{
+                fontSize: 8,
+                color: '#1e3a5f',
+                border: '1px solid #1a2744',
+                borderRadius: 3,
+                padding: '2px 5px',
+                letterSpacing: '0.05em',
+                fontWeight: 600,
+                textTransform: 'uppercase',
+              }}>
+                Be first to report
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function updateMapSource(map, stations, selectedId) {
+  const source = map.getSource('stations')
+  if (!source) return false
+  source.setData({
+    type: 'FeatureCollection',
+    features: stations.map(s => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [s.lng, s.lat] },
+      properties: {
+        id: s.id,
+        name: s.name,
+        petrolPrice: s.petrolPrice ?? null,
+        dieselPrice: s.dieselPrice ?? null,
+        color: s.petrolPrice ? getPriceColor(s.petrolPrice) : s.dieselPrice ? getPriceColor(s.dieselPrice) : '#1e293b',
+        min_price: (s.petrolPrice != null || s.dieselPrice != null)
+          ? Math.min(s.petrolPrice ?? 99, s.dieselPrice ?? 99)
+          : 99,
+        hasPrice: (s.petrolPrice != null || s.dieselPrice != null) ? 1 : 0,
+        isSelected: s.id === selectedId ? 1 : 0,
+        stale: freshnessState(s.reportedAt) === 'stale' ? 0.4 : 1,
+      }
+    }))
+  })
+  return true
+}
+
 export default function Home() {
   const mapContainer = useRef(null)
   const map = useRef(null)
-  const markersRef = useRef({})
-
+  const stationListRef = useRef(null)
+  const stationCardRefs = useRef({})
   const [stations, setStations] = useState([])
-  const [cheapest, setCheapest] = useState({ cheapestPetrol: null, cheapestDiesel: null })
+  const [allStations, setAllStations] = useState([])
+  const [cheapest, setCheapest] = useState({ petrol: null, diesel: null })
   const [selected, setSelected] = useState(null)
   const [fuelFilter, setFuelFilter] = useState('all')
-  const [availOnly, setAvailOnly] = useState(false)
+  const [countyFilter, setCountyFilter] = useState('')
   const [sortBy, setSortBy] = useState('price')
   const [search, setSearch] = useState('')
   const [userPos, setUserPos] = useState(null)
@@ -96,103 +409,369 @@ export default function Home() {
   const [locateError, setLocateError] = useState(null)
   const [searching, setSearching] = useState(false)
   const [searchGeoResult, setSearchGeoResult] = useState(null)
-
   const [reportModal, setReportModal] = useState(null)
-  const [reportType, setReportType] = useState('price_update')
   const [reportForm, setReportForm] = useState({})
   const [submitting, setSubmitting] = useState(false)
   const [submitResult, setSubmitResult] = useState(null)
-
   const [geofencePrompt, setGeofencePrompt] = useState(null)
-  const [confirming, setConfirming] = useState(null)
-  const [confirmResult, setConfirmResult] = useState(null)
-  const [contributorBadge, setContributorBadge] = useState(null)
+  const [locationPrompt, setLocationPrompt] = useState(true)
+  const [loading, setLoading] = useState(true)
+  const [mapReady, setMapReady] = useState(false)
+  const layersInitialised = useRef(false)
+  const allStationsRef = useRef([])
+  const stationsRef = useRef([])
+  const selectedRef = useRef(null)
+  const mapReadyRef = useRef(false)
 
+  useEffect(() => { allStationsRef.current = allStations }, [allStations])
+  useEffect(() => { stationsRef.current = stations }, [stations])
+  useEffect(() => { selectedRef.current = selected }, [selected])
+  useEffect(() => { mapReadyRef.current = mapReady }, [mapReady])
+
+  // Scroll selected into view
   useEffect(() => {
-    fetch('/api/stations').then(r => r.json()).then(setStations)
-    fetch('/api/cheapest').then(r => r.json()).then(setCheapest)
+    if (!selected) return
+    const card = stationCardRefs.current[selected.id]
+    if (card && stationListRef.current) {
+      card.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [selected])
+
+  // Update map when selected changes
+  useEffect(() => {
+    if (map.current && mapReady && stations.length) {
+      updateMapSource(map.current, stations, selected?.id)
+    }
+  }, [selected, mapReady])
+
+  // Escape key
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') setSelected(null) }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  useEffect(() => {
-    if (!userPos || !stations.length) return
-    const nearby = stations.filter(s => distKm(userPos, s) < 0.3)
-    if (nearby.length > 0 && !geofencePrompt) setGeofencePrompt(nearby[0])
-  }, [userPos, stations])
+  const countyCounts = useMemo(() => {
+    const counts = {}
+    for (const s of allStations) {
+      if (s.county) counts[s.county] = (counts[s.county] ?? 0) + 1
+    }
+    return counts
+  }, [allStations])
 
+  // Initial load
+  useEffect(() => {
+    setLoading(true)
+    fetch('/api/stations/all')
+      .then(r => r.json())
+      .then(data => {
+        if (data.stations) {
+          const normalised = data.stations.map(normaliseStation)
+          setAllStations(normalised)
+          setStations(normalised)
+        }
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }, [])
+
+  // County filter
+  useEffect(() => {
+    setSelected(null)
+    if (!countyFilter) {
+      setStations(allStations)
+      if (map.current && mapReady) updateMapSource(map.current, allStations, null)
+      map.current?.flyTo({ center: [-8.0, 53.4], zoom: 6.5 })
+      return
+    }
+    const filtered = allStations.filter(s => s.county?.toLowerCase() === countyFilter.toLowerCase())
+    setStations(filtered)
+    if (map.current && mapReady) updateMapSource(map.current, filtered, null)
+    if (filtered.length > 0 && map.current) {
+      const avgLat = filtered.reduce((sum, s) => sum + s.lat, 0) / filtered.length
+      const avgLng = filtered.reduce((sum, s) => sum + s.lng, 0) / filtered.length
+      map.current.flyTo({ center: [avgLng, avgLat], zoom: 9 })
+    }
+  }, [countyFilter, allStations, mapReady])
+
+  // Cheapest prices — national baseline from materialised view
+  useEffect(() => {
+    fetch('/api/prices/latest')
+      .then(r => r.json())
+      .then(data => {
+        if (!data.counties) return
+        let cheapestPetrol = null
+        let cheapestDiesel = null
+        for (const county of data.counties) {
+          const p = county.fuels?.petrol
+          const d = county.fuels?.diesel
+          if (p && (!cheapestPetrol || p.price < cheapestPetrol.price)) cheapestPetrol = { ...p, county: county.county }
+          if (d && (!cheapestDiesel || d.price < cheapestDiesel.price)) cheapestDiesel = { ...d, county: county.county }
+        }
+        setCheapest({ petrol: cheapestPetrol, diesel: cheapestDiesel })
+      })
+  }, [])
+
+  // When in near-me or search mode, override the cheapest banner with the
+  // cheapest station from the currently loaded set — more relevant to the user
+  const localCheapest = useMemo(() => {
+    // Only override when user has a position and stations are a local subset
+    if (!userPos || stations.length === allStations.length) return null
+    let petrol = null
+    let diesel = null
+    for (const s of stations) {
+      if (s.petrolPrice && (!petrol || s.petrolPrice < petrol.price)) {
+        petrol = { price: s.petrolPrice, station_id: s.id, station_name: s.name }
+      }
+      if (s.dieselPrice && (!diesel || s.dieselPrice < diesel.price)) {
+        diesel = { price: s.dieselPrice, station_id: s.id, station_name: s.name }
+      }
+    }
+    return { petrol, diesel }
+  }, [userPos, stations, allStations])
+
+  const displayCheapest = localCheapest ?? cheapest
+
+  // Geofence
+  useEffect(() => {
+    if (!userPos || !allStations.length) return
+    const nearby = allStations.filter(s => distKm(userPos, s) < 0.3)
+    if (nearby.length > 0 && !geofencePrompt) setGeofencePrompt(nearby[0])
+  }, [userPos, allStations])
+
+  // Map init
   useEffect(() => {
     if (map.current || !mapContainer.current) return
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
-      style: 'mapbox://styles/mapbox/light-v11',
+      style: 'mapbox://styles/mapbox/dark-v11',
       center: [-8.0, 53.4],
       zoom: 6.5,
     })
     map.current.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    map.current.on('load', () => setMapReady(true))
+    map.current.on('dragstart', () => setSelected(null))
   }, [])
 
+  // Cluster layers init
   useEffect(() => {
-    if (!map.current || !stations.length) return
-    Object.values(markersRef.current).forEach(m => m.remove())
-    markersRef.current = {}
-    stations.forEach(s => {
-      const petrolColor = STATUS_COLOR[s.petrolStatus?.status ?? 'unknown']
-      const dieselColor = STATUS_COLOR[s.dieselStatus?.status ?? 'unknown']
-      const stale = freshnessState(s.latestPrice?.scraped_at) === 'stale'
-      const el = document.createElement('div')
-      el.style.cssText = 'position:relative;width:28px;height:28px;cursor:pointer'
-      el.innerHTML = `
-        <div style="width:28px;height:28px;border-radius:50%;background:${petrolColor};border:2px solid white;opacity:${stale ? 0.5 : 1};display:flex;align-items:center;justify-content:center">
-          <div style="width:8px;height:8px;border-radius:50%;background:white;opacity:0.9"></div>
-        </div>
-        <div style="position:absolute;bottom:-2px;right:-2px;width:11px;height:11px;border-radius:50%;background:${dieselColor};border:1.5px solid white"></div>
-      `
-      el.addEventListener('click', () => {
-        setSelected(s)
-        setMobileListOpen(false)
-        map.current.flyTo({ center: [s.lng, s.lat], zoom: 14 })
+    if (!mapReady || !map.current || !stations.length || layersInitialised.current) return
+
+    const geojson = {
+      type: 'FeatureCollection',
+      features: stations.map(s => {
+        const cheapestPrice = s.petrolPrice != null && s.dieselPrice != null
+          ? Math.min(s.petrolPrice, s.dieselPrice)
+          : s.petrolPrice ?? s.dieselPrice ?? null
+        return {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [s.lng, s.lat] },
+          properties: {
+            id: s.id,
+            name: s.name,
+            petrolPrice: s.petrolPrice ?? null,
+            dieselPrice: s.dieselPrice ?? null,
+            color: cheapestPrice ? getPriceColor(cheapestPrice) : '#1e293b',
+            min_price: cheapestPrice ?? 99,
+            hasPrice: cheapestPrice != null ? 1 : 0,
+            isSelected: 0,
+            stale: freshnessState(s.reportedAt) === 'stale' ? 0.4 : 1,
+          }
+        }
       })
-      const marker = new mapboxgl.Marker({ element: el })
-        .setLngLat([s.lng, s.lat])
-        .addTo(map.current)
-      markersRef.current[s.id] = marker
+    }
+
+    map.current.addSource('stations', {
+      type: 'geojson',
+      data: geojson,
+      cluster: true,
+      clusterMaxZoom: 12,
+      clusterRadius: 80,
+      // Aggregate min_price across all points in a cluster
+      // This lets the cluster bubble inherit the colour of its cheapest member
+      clusterProperties: {
+        min_price: ['min', ['get', 'min_price']],
+        has_any_price: ['max', ['get', 'hasPrice']],
+      },
     })
-  }, [stations])
+
+    map.current.addLayer({
+      id: 'clusters',
+      type: 'circle',
+      source: 'stations',
+      filter: ['has', 'point_count'],
+      paint: {
+        // Colour clusters by their cheapest member's price tier
+        // Falls back to slate if no priced stations in cluster
+        'circle-color': [
+          'case',
+          ['==', ['get', 'has_any_price'], 0], '#0f172a',
+          ['<', ['get', 'min_price'], 1.87], '#15803d',
+          ['<', ['get', 'min_price'], 1.91], '#4d7c0f',
+          ['<', ['get', 'min_price'], 1.95], '#b45309',
+          ['<', ['get', 'min_price'], 1.99], '#c2410c',
+          '#991b1b'
+        ],
+        'circle-radius': [
+          'step', ['get', 'point_count'],
+          20,   5,
+          26,  20,
+          32,  60,
+          38
+        ],
+        'circle-stroke-width': 1.5,
+        'circle-stroke-color': [
+          'case',
+          ['==', ['get', 'has_any_price'], 0], '#1e293b',
+          ['<', ['get', 'min_price'], 1.87], '#22c55e',
+          ['<', ['get', 'min_price'], 1.91], '#84cc16',
+          ['<', ['get', 'min_price'], 1.95], '#fbbf24',
+          ['<', ['get', 'min_price'], 1.99], '#f97316',
+          '#ef4444'
+        ],
+        'circle-opacity': [
+          'case',
+          ['==', ['get', 'has_any_price'], 0], 0.25,
+          0.92
+        ],
+      }
+    })
+
+    map.current.addLayer({
+      id: 'cluster-count',
+      type: 'symbol',
+      source: 'stations',
+      filter: ['has', 'point_count'],
+      layout: {
+        // Two-line label: cheapest price on top, station count below
+        // concat is used because Mapbox GL expressions don't support toFixed —
+        // prices are already 3dp floats so we slice to show 5 chars e.g. "1.873"
+        'text-field': [
+          'case',
+          ['==', ['get', 'has_any_price'], 0],
+          ['concat', ['get', 'point_count_abbreviated']],
+          ['concat',
+            '€',
+            ['slice', ['to-string', ['get', 'min_price']], 0, 5],
+            '\n',
+            ['get', 'point_count_abbreviated']
+          ]
+        ],
+        'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
+        'text-size': 11,
+        'text-line-height': 1.3,
+      },
+      paint: {
+        'text-color': '#ffffff',
+        'text-halo-color': 'rgba(0,0,0,0.3)',
+        'text-halo-width': 0.5,
+      }
+    })
+
+    map.current.addLayer({
+      id: 'selected-halo',
+      type: 'circle',
+      source: 'stations',
+      filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'isSelected'], 1]],
+      paint: {
+        'circle-color': '#60a5fa',
+        'circle-radius': 18,
+        'circle-opacity': 0.25,
+        'circle-stroke-width': 0,
+      }
+    })
+
+    map.current.addLayer({
+      id: 'unclustered-point',
+      type: 'circle',
+      source: 'stations',
+      filter: ['!', ['has', 'point_count']],
+      paint: {
+        'circle-color': ['case', ['==', ['get', 'isSelected'], 1], '#60a5fa', ['get', 'color']],
+        // No-data markers are smaller and more transparent — priced markers dominate
+        'circle-radius': [
+          'case',
+          ['==', ['get', 'isSelected'], 1], 10,
+          ['==', ['get', 'hasPrice'], 1], 8,
+          5
+        ],
+        'circle-stroke-width': ['case', ['==', ['get', 'isSelected'], 1], 2, 1],
+        'circle-stroke-color': ['case', ['==', ['get', 'isSelected'], 1], 'white', 'rgba(255,255,255,0.15)'],
+        'circle-opacity': [
+          'case',
+          ['==', ['get', 'isSelected'], 1], 1,
+          ['==', ['get', 'hasPrice'], 1], ['get', 'stale'],
+          0.18  // no-data markers nearly invisible
+        ],
+      }
+    })
+
+    map.current.on('click', 'clusters', (e) => {
+      const features = map.current.queryRenderedFeatures(e.point, { layers: ['clusters'] })
+      const clusterId = features[0].properties.cluster_id
+      map.current.getSource('stations').getClusterExpansionZoom(clusterId, (err, zoom) => {
+        if (err) return
+        map.current.easeTo({ center: features[0].geometry.coordinates, zoom })
+      })
+    })
+
+    map.current.on('click', 'unclustered-point', (e) => {
+      const props = e.features[0].properties
+      const station = allStationsRef.current.find(s => s.id === props.id)
+      if (station) {
+        setSelected(station)
+        setMobileListOpen(false)
+        map.current.flyTo({ center: [station.lng, station.lat], zoom: Math.max(map.current.getZoom(), 13) })
+      }
+    })
+
+    map.current.on('click', (e) => {
+      const features = map.current.queryRenderedFeatures(e.point, { layers: ['unclustered-point', 'clusters'] })
+      if (features.length === 0) setSelected(null)
+    })
+
+    map.current.on('mouseenter', 'clusters', () => { map.current.getCanvas().style.cursor = 'pointer' })
+    map.current.on('mouseleave', 'clusters', () => { map.current.getCanvas().style.cursor = '' })
+    map.current.on('mouseenter', 'unclustered-point', () => { map.current.getCanvas().style.cursor = 'pointer' })
+    map.current.on('mouseleave', 'unclustered-point', () => { map.current.getCanvas().style.cursor = '' })
+
+    layersInitialised.current = true
+  }, [mapReady, stations])
+
+  const flyToStation = useCallback((stationId) => {
+    const station = allStations.find(s => s.id === stationId)
+    if (!station || !map.current) return
+    map.current.flyTo({ center: [station.lng, station.lat], zoom: 14 })
+    setSelected(station)
+  }, [allStations])
 
   const getFiltered = useCallback(() => {
     let list = [...stations]
-    // If search has a geocoded result but no local station matches, show all
     if (search && !searchGeoResult) {
       const q = search.toLowerCase()
       list = list.filter(s =>
-        s.name.toLowerCase().includes(q) ||
-        s.town.toLowerCase().includes(q) ||
-        s.county.toLowerCase().includes(q) ||
+        s.name?.toLowerCase().includes(q) ||
+        s.county?.toLowerCase().includes(q) ||
         s.address?.toLowerCase().includes(q) ||
         s.brand?.toLowerCase().includes(q)
       )
     }
-    if (availOnly) {
-      list = list.filter(s => {
-        if (fuelFilter === 'petrol') return s.petrolStatus?.status === 'available'
-        if (fuelFilter === 'diesel') return s.dieselStatus?.status === 'available'
-        return s.petrolStatus?.status === 'available' || s.dieselStatus?.status === 'available'
-      })
-    }
     if (sortBy === 'price') {
       list.sort((a, b) => {
-        const ap = fuelFilter === 'diesel' ? a.latestPrice?.diesel_price : a.latestPrice?.petrol_price
-        const bp = fuelFilter === 'diesel' ? b.latestPrice?.diesel_price : b.latestPrice?.petrol_price
-        return (ap ?? 99) - (bp ?? 99)
+        // Use the relevant price for the active fuel filter
+        // 'all' mode sorts by petrol price as primary
+        const ap = fuelFilter === 'diesel' ? (a.dieselPrice ?? 99) : (a.petrolPrice ?? 99)
+        const bp = fuelFilter === 'diesel' ? (b.dieselPrice ?? 99) : (b.petrolPrice ?? 99)
+        return ap - bp
       })
     } else if (sortBy === 'distance' && userPos) {
       list.sort((a, b) => distKm(userPos, a) - distKm(userPos, b))
     } else if (sortBy === 'updated') {
-      list.sort((a, b) => new Date(b.latestPrice?.scraped_at ?? 0) - new Date(a.latestPrice?.scraped_at ?? 0))
+      list.sort((a, b) => new Date(b.reportedAt ?? 0) - new Date(a.reportedAt ?? 0))
     }
     return list
-  }, [stations, search, searchGeoResult, availOnly, fuelFilter, sortBy, userPos])
+  }, [stations, search, searchGeoResult, fuelFilter, sortBy, userPos])
 
-  // Geocode search via Mapbox and load nearby stations
   const geocodeSearch = useCallback(async (query) => {
     if (!query || query.length < 2) return
     setSearching(true)
@@ -206,229 +785,148 @@ export default function Home() {
         const [lng, lat] = feature.center
         setSearchGeoResult({ lat, lng, name: feature.place_name })
         map.current?.flyTo({ center: [lng, lat], zoom: 11 })
-        // Load stations near this location
-        const stationsRes = await fetch(`/api/stations?lat=${lat}&lng=${lng}&radius=30000`)
-        const nearbyStations = await stationsRes.json()
-        if (Array.isArray(nearbyStations) && nearbyStations.length > 0) {
-          setStations(nearbyStations)
+        const stationsRes = await fetch(`/api/stations/nearby?lat=${lat}&lng=${lng}&radius=30000`)
+        const stationsData = await stationsRes.json()
+        if (stationsData.stations?.length > 0) {
+          const normalised = stationsData.stations.map(normaliseStation)
+          setStations(normalised)
+          if (map.current && mapReady) updateMapSource(map.current, normalised, selected?.id)
           setSortBy('distance')
           setUserPos({ lat, lng })
         }
       }
-    } catch (e) {
-      console.error('Geocode error:', e)
-    }
+    } catch (e) { console.error('Geocode error:', e) }
     setSearching(false)
-  }, [])
+  }, [mapReady, selected])
 
-  // Debounce search — run geocoding after user stops typing for 600ms
   const searchDebounceRef = useRef(null)
   const handleSearchChange = useCallback((value) => {
     setSearch(value)
     setSearchGeoResult(null)
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
-    if (value.length >= 2) {
-      searchDebounceRef.current = setTimeout(() => geocodeSearch(value), 600)
-    }
+    if (value.length >= 2) searchDebounceRef.current = setTimeout(() => geocodeSearch(value), 600)
   }, [geocodeSearch])
 
   const clearSearch = useCallback(() => {
     setSearch('')
     setSearchGeoResult(null)
     setUserPos(null)
-    fetch('/api/stations').then(r => r.json()).then(setStations)
+    setCountyFilter('')
+    setSelected(null)
+    setStations(allStations)
+    if (map.current && mapReady) updateMapSource(map.current, allStations, null)
     map.current?.flyTo({ center: [-8.0, 53.4], zoom: 6.5 })
-  }, [])
+  }, [allStations, mapReady])
 
-  // iOS-safe geolocation — must be called synchronously in click handler
   const locateMe = useCallback(() => {
     setLocateError(null)
-    if (!navigator.geolocation) {
-      setLocateError('Geolocation is not supported by your browser.')
-      return
-    }
+    setLocationPrompt(false)
+    if (!navigator.geolocation) { setLocateError('Geolocation not supported.'); return }
     setLocating(true)
-    // Options tuned for mobile: high accuracy, 15s timeout, no cache
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude: lat, longitude: lng } = pos.coords
         setUserPos({ lat, lng })
         setSortBy('distance')
         setLocating(false)
-        setLocateError(null)
         map.current?.flyTo({ center: [lng, lat], zoom: 12 })
-        fetch(`/api/stations?lat=${lat}&lng=${lng}&radius=25000`)
+        fetch(`/api/stations/nearby?lat=${lat}&lng=${lng}&radius=25000`)
           .then(r => r.json())
           .then(data => {
-            if (Array.isArray(data) && data.length > 0) {
-              setStations(data)
+            if (data.stations?.length > 0) {
+              const normalised = data.stations.map(normaliseStation)
+              setStations(normalised)
+              if (map.current && mapReady) updateMapSource(map.current, normalised, selected?.id)
             }
           })
       },
       (err) => {
         setLocating(false)
         switch (err.code) {
-          case 1:
-            setLocateError('Location access denied. Please enable location permissions in your browser settings.')
-            break
-          case 2:
-            setLocateError('Could not determine your location. Please try again.')
-            break
-          case 3:
-            setLocateError('Location request timed out. Please try again.')
-            break
-          default:
-            setLocateError('Location unavailable. Please try again.')
+          case 1: setLocateError('Location access denied.'); break
+          case 2: setLocateError('Could not determine location.'); break
+          case 3: setLocateError('Location request timed out.'); break
+          default: setLocateError('Location unavailable.')
         }
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     )
-  }, [])
-
-  const handleConfirm = async (station) => {
-    setConfirming(station.id)
-    const res = await fetch('/api/confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ station_id: station.id, county: station.county }),
-    })
-    const data = await res.json()
-    setConfirming(null)
-    setGeofencePrompt(null)
-    setConfirmResult({
-      message: data.already_confirmed ? 'Already confirmed recently — thanks!' : data.message ?? 'Confirmed!',
-      county: station.county,
-    })
-    setTimeout(() => setConfirmResult(null), 4000)
-  }
+  }, [mapReady, selected])
 
   const submitReport = async () => {
     if (!reportModal) return
     setSubmitting(true)
-    const body = {
-      station_id: reportModal.id,
-      petrol_price: reportForm.petrol_price ? parseFloat(reportForm.petrol_price) : undefined,
-      diesel_price: reportForm.diesel_price ? parseFloat(reportForm.diesel_price) : undefined,
-      petrol_status: reportForm.petrol_status ?? reportModal.petrolStatus?.status ?? 'unknown',
-      diesel_status: reportForm.diesel_status ?? reportModal.dieselStatus?.status ?? 'unknown',
-      report_type: reportType,
-      county: reportModal.county,
-    }
-    const res = await fetch('/api/report', {
+    const submissions = []
+    if (reportForm.petrol_price) submissions.push(fetch('/api/prices/report', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    const data = await res.json()
-    setSubmitting(false)
-    if (res.ok) {
-      setSubmitResult(data)
-      if (data.contributor) setContributorBadge(data.contributor)
-      setTimeout(() => { setReportModal(null); setSubmitResult(null) }, 3000)
-    } else {
-      setSubmitResult({ error: data.error ?? 'Something went wrong' })
+      body: JSON.stringify({ station_id: reportModal.id, fuel_type: 'petrol', price: parseFloat(reportForm.petrol_price) })
+    }))
+    if (reportForm.diesel_price) submissions.push(fetch('/api/prices/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ station_id: reportModal.id, fuel_type: 'diesel', price: parseFloat(reportForm.diesel_price) })
+    }))
+    if (submissions.length === 0) {
+      setSubmitting(false)
+      setSubmitResult({ error: 'Enter at least one price' })
+      return
     }
+
+    const results = await Promise.all(submissions)
+    setSubmitting(false)
+
+    if (!results.every(r => r.ok)) {
+      setSubmitResult({ error: 'Something went wrong. Try again.' })
+      return
+    }
+
+    try {
+      const res = await fetch(`/api/stations/nearby?lat=${reportModal.lat}&lng=${reportModal.lng}&radius=100`)
+      const data = await res.json()
+      const updated = data.stations?.find(s => s.id === reportModal.id)
+      if (updated) {
+        const normalised = normaliseStation(updated)
+        const updateList = (list) => list.map(s => s.id === normalised.id ? normalised : s)
+        setStations(prev => {
+          const next = updateList(prev)
+          if (map.current && mapReadyRef.current) {
+            updateMapSource(map.current, next, selectedRef.current?.id)
+          }
+          return next
+        })
+        setAllStations(prev => updateList(prev))
+        if (selectedRef.current?.id === normalised.id) setSelected(normalised)
+      }
+    } catch (e) {
+      console.error('Failed to refresh station:', e)
+    }
+
+    setSubmitResult({ success: true })
+    setTimeout(() => { setReportModal(null); setSubmitResult(null) }, 2500)
   }
 
   const filtered = getFiltered()
 
-  const StationCard = ({ s }) => {
-    const isCheapestPetrol = cheapest.cheapestPetrol?.station_id === s.id
-    const isCheapestDiesel = cheapest.cheapestDiesel?.station_id === s.id
-    const isSelected = selected?.id === s.id
-    const dStr = userPos ? `${distKm(userPos, s).toFixed(1)} km` : ''
-
-    return (
-      <div
-        onClick={() => {
-          setSelected(s)
-          setMobileListOpen(false)
-          map.current?.flyTo({ center: [s.lng, s.lat], zoom: 14 })
-        }}
-        style={{
-          padding: '10px 12px', borderRadius: 9, marginBottom: 5, cursor: 'pointer',
-          border: `1px solid ${isSelected ? '#1d4ed8' : '#e5e7eb'}`,
-          borderLeft: isCheapestPetrol ? '3px solid #16a34a' : isCheapestDiesel ? '3px solid #d97706' : undefined,
-          background: isSelected ? '#eff6ff' : '#fff',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 500, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <AvailabilityDot status={s.petrolStatus?.status} size={7} />
-              {s.name}
-              <span style={{ fontWeight: 400, color: '#6b7280' }}>· {s.town}</span>
-            </div>
-            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>{s.county}</div>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, flexShrink: 0, marginLeft: 8 }}>
-            {isCheapestPetrol && <span style={{ fontSize: 10, background: '#eff6ff', color: '#1d4ed8', padding: '1px 6px', borderRadius: 4, fontWeight: 500 }}>Cheapest petrol</span>}
-            {isCheapestDiesel && <span style={{ fontSize: 10, background: '#fffbeb', color: '#b45309', padding: '1px 6px', borderRadius: 4, fontWeight: 500 }}>Cheapest diesel</span>}
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          {fuelFilter !== 'diesel' && (
-            <div style={{ padding: '5px 9px', borderRadius: 6, border: `1px solid ${isCheapestPetrol ? '#16a34a' : '#e5e7eb'}`, background: isCheapestPetrol ? '#f0fdf4' : '#f9fafb', minWidth: 64, textAlign: 'center' }}>
-              <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#9ca3af', letterSpacing: '0.4px' }}>Petrol</div>
-              <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'monospace', color: isCheapestPetrol ? '#16a34a' : '#111' }}>€{Number(s.latestPrice?.petrol_price ?? 0).toFixed(3)}</div>
-              <div style={{ fontSize: 9, color: STATUS_COLOR[s.petrolStatus?.status ?? 'unknown'], display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
-                <AvailabilityDot status={s.petrolStatus?.status} size={5} />
-                {s.petrolStatus?.status ?? 'unknown'}
-              </div>
-            </div>
-          )}
-          {fuelFilter !== 'petrol' && (
-            <div style={{ padding: '5px 9px', borderRadius: 6, border: `1px solid ${isCheapestDiesel ? '#d97706' : '#e5e7eb'}`, background: isCheapestDiesel ? '#fffbeb' : '#f9fafb', minWidth: 64, textAlign: 'center' }}>
-              <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#9ca3af', letterSpacing: '0.4px' }}>Diesel</div>
-              <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'monospace', color: isCheapestDiesel ? '#d97706' : '#111' }}>€{Number(s.latestPrice?.diesel_price ?? 0).toFixed(3)}</div>
-              <div style={{ fontSize: 9, color: STATUS_COLOR[s.dieselStatus?.status ?? 'unknown'], display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3 }}>
-                <AvailabilityDot status={s.dieselStatus?.status} size={5} />
-                {s.dieselStatus?.status ?? 'unknown'}
-              </div>
-            </div>
-          )}
-          <div style={{ flex: 1 }} />
-          <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-            {dStr && <div style={{ fontSize: 11, color: '#9ca3af' }}>{dStr}</div>}
-            <FreshnessTag dateStr={s.latestPrice?.scraped_at} />
-            <ConfidenceDots confidence={s.latestPrice?.confidence ?? 3} />
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  const SearchBar = ({ mobile = false }) => (
-    <div style={{ display: 'flex', gap: 6, position: 'relative' }}>
-      <div style={{ flex: 1, position: 'relative' }}>
-        <input
-          value={search}
-          onChange={e => handleSearchChange(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && geocodeSearch(search)}
-          placeholder="Search town, county, station..."
-          style={{ width: '100%', padding: '8px 32px 8px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
-        />
-        {search && (
-          <button onClick={clearSearch} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
-        )}
-      </div>
-      <button
-        onClick={locateMe}
-        disabled={locating}
-        style={{ padding: '8px 12px', background: locating ? '#93c5fd' : '#1d4ed8', color: 'white', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 500, cursor: locating ? 'wait' : 'pointer', whiteSpace: 'nowrap', minWidth: 80 }}
-      >
-        {locating ? 'Finding...' : 'Near me'}
-      </button>
-    </div>
-  )
+  const headerStationCount = countyFilter
+    ? `${filtered.length} stations in ${countyFilter}`
+    : loading ? '...' : `${allStations.length} stations`
 
   return (
     <>
       <Head>
-        <title>FuelPrice Ireland</title>
+        <title>{selected ? `${selected.name} · FuelPrice Ireland` : 'FuelPrice Ireland'}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <style>{`
-          body { margin: 0; }
+          * { box-sizing: border-box; }
+          body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; background: #0f172a; }
+          select option { background: #1e293b; color: #e2e8f0; }
+          select optgroup { background: #1e293b; color: #64748b; }
+          ::-webkit-scrollbar { width: 4px; }
+          ::-webkit-scrollbar-track { background: transparent; }
+          ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+          @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+          @keyframes pulse { 0%,100%{opacity:0.4} 50%{opacity:0.8} }
           @media (max-width: 768px) {
             .desktop-sidebar { display: none !important; }
             .mobile-bar { display: flex !important; }
@@ -438,90 +936,154 @@ export default function Home() {
           }
         `}</style>
       </Head>
-
-      <div style={{ display: 'flex', height: '100vh', fontFamily: 'system-ui, sans-serif', fontSize: 14, position: 'relative' }}>
+      <div style={{ display: 'flex', height: '100vh', fontFamily: "'DM Sans', system-ui, sans-serif", fontSize: 14, position: 'relative', background: '#0f172a' }}>
 
         {/* DESKTOP SIDEBAR */}
-        <div className="desktop-sidebar" style={{ width: 340, display: 'flex', flexDirection: 'column', borderRight: '1px solid #e5e7eb', background: '#fff', overflow: 'hidden' }}>
-          <div style={{ padding: '12px 14px', borderBottom: '1px solid #e5e7eb' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-              <div style={{ width: 28, height: 28, background: '#1d4ed8', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+        <div className="desktop-sidebar" style={{ width: 320, display: 'flex', flexDirection: 'column', background: '#0f172a', borderRight: '1px solid #1e293b', overflow: 'hidden' }}>
+          <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid #1e293b' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+              <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 0 12px rgba(37,99,235,0.4)' }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="white"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
               </div>
               <div>
-                <div style={{ fontWeight: 600, fontSize: 15, letterSpacing: '-0.2px' }}>FuelPrice Ireland</div>
-                <div style={{ fontSize: 11, color: '#6b7280', fontFamily: 'monospace' }}>Live prices + availability</div>
-              </div>
-              {contributorBadge && (
-                <div style={{ marginLeft: 'auto', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '4px 8px', fontSize: 11, color: '#1d4ed8', textAlign: 'center' }}>
-                  <div style={{ fontWeight: 600 }}>Score {contributorBadge.score}</div>
-                  <div style={{ fontSize: 10, color: '#6b7280' }}>{contributorBadge.submissions} updates</div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: '#e2e8f0', letterSpacing: '-0.01em' }}>FuelPrice Ireland</div>
+                <div style={{ fontSize: 10, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginTop: 1 }}>
+                  {headerStationCount}
                 </div>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', gap: 10, background: '#f9fafb', borderRadius: 8, padding: '8px 10px', marginBottom: 10, border: '1px solid #e5e7eb' }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Cheapest petrol</div>
-                <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'monospace', color: '#16a34a' }}>{cheapest.cheapestPetrol ? `€${Number(cheapest.cheapestPetrol.petrol_price).toFixed(3)}` : '—'}</div>
-                <div style={{ fontSize: 10, color: '#9ca3af' }}>{cheapest.cheapestPetrol?.town ?? '—'}</div>
-              </div>
-              <div style={{ width: 1, background: '#e5e7eb' }} />
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Cheapest diesel</div>
-                <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'monospace', color: '#d97706' }}>{cheapest.cheapestDiesel ? `€${Number(cheapest.cheapestDiesel.diesel_price).toFixed(3)}` : '—'}</div>
-                <div style={{ fontSize: 10, color: '#9ca3af' }}>{cheapest.cheapestDiesel?.town ?? '—'}</div>
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 8 }}>
+            {/* Cheapest cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+              {[
+                { label: 'Petrol', data: displayCheapest.petrol, color: '#22c55e' },
+                { label: 'Diesel', data: displayCheapest.diesel, color: '#f59e0b' },
+              ].map(({ label, data, color }) => (
+                <div key={label}
+                  onClick={() => data?.station_id && flyToStation(data.station_id)}
+                  style={{ padding: '10px 12px', background: '#1e293b', borderRadius: 8, border: '1px solid #334155', cursor: data?.station_id ? 'pointer' : 'default', transition: 'border-color 0.15s' }}
+                  onMouseEnter={e => { if (data?.station_id) e.currentTarget.style.borderColor = color }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = '#334155' }}
+                >
+                  <div style={{ fontSize: 9, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Cheapest {label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, fontFamily: '"DM Mono", "Courier New", monospace', color, lineHeight: 1, marginBottom: 4 }}>
+                    {data ? `€${Number(data.price).toFixed(3)}` : '—'}
+                  </div>
+                  <div style={{ fontSize: 10, color: data?.station_id ? '#60a5fa' : '#475569', textDecoration: data?.station_id ? 'underline' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {data?.station_name ?? '—'}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Price scale */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, padding: '5px 8px', background: '#0f172a', borderRadius: 6, border: '1px solid #1e293b' }}>
+              <span style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em' }}>€/L</span>
+              {[
+                { color: '#22c55e', label: '<1.87' },
+                { color: '#84cc16', label: '<1.91' },
+                { color: '#fbbf24', label: '<1.95' },
+                { color: '#f59e0b', label: '<1.99' },
+                { color: '#ef4444', label: '1.99+' },
+              ].map(({ color, label }) => (
+                <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0 }} />
+                  <span style={{ fontSize: 9, color: '#475569', fontFamily: '"DM Mono", monospace' }}>{label}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Fuel filter tabs */}
+            <div style={{ display: 'flex', gap: 4, marginBottom: 10, background: '#1e293b', borderRadius: 7, padding: 3 }}>
               {['all', 'petrol', 'diesel'].map(f => (
-                <button key={f} onClick={() => setFuelFilter(f)} style={{ padding: '3px 10px', borderRadius: 20, border: '1px solid', fontSize: 12, cursor: 'pointer', background: fuelFilter === f ? '#1d4ed8' : '#f9fafb', color: fuelFilter === f ? 'white' : '#6b7280', borderColor: fuelFilter === f ? '#1d4ed8' : '#e5e7eb' }}>
-                  {f === 'all' ? 'All fuel' : f.charAt(0).toUpperCase() + f.slice(1)}
+                <button key={f} onClick={() => setFuelFilter(f)}
+                  style={{ flex: 1, padding: '5px 0', borderRadius: 5, border: 'none', fontSize: 11, fontWeight: 500, cursor: 'pointer', background: fuelFilter === f ? '#334155' : 'transparent', color: fuelFilter === f ? '#e2e8f0' : '#475569', transition: 'all 0.15s', letterSpacing: '0.03em' }}>
+                  {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
                 </button>
               ))}
-              <button onClick={() => setAvailOnly(v => !v)} style={{ padding: '3px 10px', borderRadius: 20, border: '1px solid', fontSize: 12, cursor: 'pointer', background: availOnly ? '#16a34a' : '#f9fafb', color: availOnly ? 'white' : '#6b7280', borderColor: availOnly ? '#16a34a' : '#e5e7eb' }}>
-                Available only
-              </button>
             </div>
 
-            <SearchBar />
+            {/* County filter */}
+            <div style={{ marginBottom: 8 }}>
+              <CountySelect value={countyFilter} onChange={setCountyFilter} countyCounts={countyCounts} />
+            </div>
 
-            {locateError && (
-              <div style={{ marginTop: 6, padding: '6px 10px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 11, color: '#b91c1c' }}>
-                {locateError}
+            <SearchBar
+              search={search}
+              onSearchChange={handleSearchChange}
+              onSearchEnter={geocodeSearch}
+              onClear={clearSearch}
+              onLocate={locateMe}
+              locating={locating}
+            />
+            {locateError && <div style={{ marginTop: 6, padding: '6px 10px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 6, fontSize: 11, color: '#ef4444' }}>{locateError}</div>}
+            {searching && <div style={{ marginTop: 6, fontSize: 10, color: '#475569', textAlign: 'center', letterSpacing: '0.05em' }}>SEARCHING...</div>}
+            {searchGeoResult && (
+              <div style={{ marginTop: 6, padding: '5px 10px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 6, fontSize: 11, color: '#22c55e', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Near {search}</span>
+                <button onClick={clearSearch} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#475569', fontSize: 14 }}>×</button>
               </div>
             )}
-
-            {searching && (
-              <div style={{ marginTop: 6, fontSize: 11, color: '#6b7280', textAlign: 'center' }}>Searching...</div>
-            )}
-
-            {searchGeoResult && (
-              <div style={{ marginTop: 6, padding: '5px 10px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 6, fontSize: 11, color: '#15803d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>Showing stations near {search}</span>
-                <button onClick={clearSearch} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', fontSize: 13 }}>×</button>
+            {locationPrompt && !userPos && (
+              <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(37,99,235,0.1)', border: '1px solid rgba(37,99,235,0.2)', borderRadius: 6, fontSize: 11, color: '#60a5fa', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Enable location for nearby stations</span>
+                <button onClick={locateMe} style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: 4, padding: '3px 8px', fontSize: 10, cursor: 'pointer', fontWeight: 600, letterSpacing: '0.05em' }}>ON</button>
               </div>
             )}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderBottom: '1px solid #e5e7eb', background: '#f9fafb' }}>
-            <span style={{ fontSize: 11, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Sort:</span>
+          {/* Sort row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderBottom: '1px solid #1e293b' }}>
+            <span style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Sort</span>
+            <div style={{ width: 1, height: 10, background: '#1e293b' }} />
             {['price', 'distance', 'updated'].map(s => (
-              <button key={s} onClick={() => setSortBy(s)} style={{ padding: '2px 8px', borderRadius: 5, border: '1px solid', fontSize: 12, cursor: 'pointer', background: sortBy === s ? '#1d4ed8' : '#fff', color: sortBy === s ? 'white' : '#6b7280', borderColor: sortBy === s ? '#1d4ed8' : '#e5e7eb' }}>
+              <button key={s} onClick={() => setSortBy(s)}
+                style={{ padding: '2px 8px', borderRadius: 4, border: 'none', fontSize: 10, cursor: 'pointer', background: sortBy === s ? '#2563eb' : 'transparent', color: sortBy === s ? 'white' : '#475569', fontWeight: sortBy === s ? 600 : 400, letterSpacing: '0.04em', transition: 'all 0.15s' }}>
                 {s.charAt(0).toUpperCase() + s.slice(1)}
               </button>
             ))}
+            <div style={{ flex: 1 }} />
+            <span style={{ fontSize: 10, color: '#334155' }}>{filtered.length}</span>
           </div>
 
-          <div style={{ overflowY: 'auto', flex: 1, padding: 8 }}>
-            {filtered.length === 0 && !searching && (
-              <div style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>
-                <div style={{ fontSize: 13, marginBottom: 4 }}>No stations found near "{search}"</div>
-                <div style={{ fontSize: 11 }}>Try a different town or county</div>
+          {/* Station list */}
+          <div ref={stationListRef} style={{ overflowY: 'auto', flex: 1, padding: '8px 10px' }}>
+            {loading && (
+              <div style={{ padding: '16px 0' }}>
+                {[70, 55, 80, 60, 75, 65].map((width, i) => (
+                  <div key={i} style={{ padding: '12px', marginBottom: 4, borderRadius: 8, border: '1px solid #1e293b', background: '#0f172a' }}>
+                    <div style={{ height: 12, background: '#1e293b', borderRadius: 4, marginBottom: 8, width: `${width}%`, animation: 'pulse 1.5s ease-in-out infinite' }} />
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ height: 28, background: '#1e293b', borderRadius: 6, flex: 1, animation: 'pulse 1.5s ease-in-out infinite' }} />
+                      <div style={{ height: 28, background: '#1e293b', borderRadius: 6, flex: 1, animation: 'pulse 1.5s ease-in-out infinite' }} />
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
-            {filtered.map(s => <StationCard key={s.id} s={s} />)}
+            {!loading && filtered.length === 0 && (
+              <div style={{ padding: 32, textAlign: 'center', color: '#334155' }}>
+                <div style={{ fontSize: 12, marginBottom: 4 }}>{countyFilter ? `No stations in ${countyFilter}` : 'No stations found'}</div>
+                <div style={{ fontSize: 10 }}>Try adjusting your filters</div>
+              </div>
+            )}
+            {!loading && filtered.map(s => (
+              <div key={s.id} ref={el => { stationCardRefs.current[s.id] = el }}>
+                <StationCard
+                  s={s}
+                  isSelected={selected?.id === s.id}
+                  isCheapestPetrol={displayCheapest.petrol?.station_id === s.id}
+                  isCheapestDiesel={displayCheapest.diesel?.station_id === s.id}
+                  fuelFilter={fuelFilter}
+                  userPos={userPos}
+                  onClick={() => {
+                    setSelected(s)
+                    setMobileListOpen(false)
+                    map.current?.flyTo({ center: [s.lng, s.lat], zoom: Math.max(map.current?.getZoom() ?? 12, 13) })
+                  }}
+                />
+              </div>
+            ))}
           </div>
         </div>
 
@@ -529,164 +1091,190 @@ export default function Home() {
         <div style={{ flex: 1, position: 'relative' }}>
           <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
 
-          <div className="desktop-sidebar" style={{ display: 'flex', position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 14px', gap: 14, zIndex: 500, whiteSpace: 'nowrap' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#6b7280', letterSpacing: '0.5px' }}>Cheapest petrol</div>
-              <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#16a34a' }}>{cheapest.cheapestPetrol ? `€${Number(cheapest.cheapestPetrol.petrol_price).toFixed(3)}` : '—'}</div>
-              <div style={{ fontSize: 10, color: '#9ca3af' }}>{cheapest.cheapestPetrol?.town ?? '—'}</div>
-            </div>
-            <div style={{ width: 1, background: '#e5e7eb' }} />
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#6b7280', letterSpacing: '0.5px' }}>Cheapest diesel</div>
-              <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#d97706' }}>{cheapest.cheapestDiesel ? `€${Number(cheapest.cheapestDiesel.diesel_price).toFixed(3)}` : '—'}</div>
-              <div style={{ fontSize: 10, color: '#9ca3af' }}>{cheapest.cheapestDiesel?.town ?? '—'}</div>
-            </div>
+          {/* Cheapest overlay */}
+          <div className="desktop-sidebar" style={{ display: 'flex', position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: 'rgba(15,23,42,0.92)', backdropFilter: 'blur(12px)', border: '1px solid #1e293b', borderRadius: 10, padding: '10px 20px', gap: 24, zIndex: 500, whiteSpace: 'nowrap', boxShadow: '0 4px 24px rgba(0,0,0,0.4)' }}>
+            {[
+              { label: 'Petrol', data: displayCheapest.petrol, color: '#22c55e' },
+              { label: 'Diesel', data: displayCheapest.diesel, color: '#f59e0b' },
+            ].map(({ label, data, color }, i) => (
+              <div key={label} style={{ display: 'flex', alignItems: 'center' }}>
+                {i === 1 && <div style={{ width: 1, background: '#1e293b', alignSelf: 'stretch', marginRight: 24 }} />}
+                <div onClick={() => data?.station_id && flyToStation(data.station_id)}
+                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: data?.station_id ? 'pointer' : 'default' }}>
+                  <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#475569', letterSpacing: '0.1em', marginBottom: 2 }}>Cheapest {label}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, fontFamily: '"DM Mono", monospace', color, lineHeight: 1, marginBottom: 2 }}>
+                    {data ? `€${Number(data.price).toFixed(3)}` : '—'}
+                  </div>
+                  <div style={{ fontSize: 10, color: data?.station_id ? '#60a5fa' : '#475569', textDecoration: data?.station_id ? 'underline' : 'none' }}>
+                    {data?.station_name ?? '—'}
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
 
+          {/* Geofence prompt */}
           {geofencePrompt && (
-            <div style={{ position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)', background: '#fff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '12px 16px', zIndex: 600, minWidth: 280, textAlign: 'center' }}>
-              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>You're near {geofencePrompt.name}</div>
-              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>Are today's prices still correct?</div>
+            <div style={{ position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)', background: 'rgba(15,23,42,0.95)', backdropFilter: 'blur(12px)', border: '1px solid #334155', borderRadius: 10, padding: '14px 18px', zIndex: 600, minWidth: 280, textAlign: 'center', boxShadow: '0 4px 24px rgba(0,0,0,0.4)' }}>
+              <div style={{ fontSize: 13, fontWeight: 500, color: '#e2e8f0', marginBottom: 4 }}>Near {geofencePrompt.name}</div>
+              <div style={{ fontSize: 11, color: '#475569', marginBottom: 12 }}>Are today's prices still correct?</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => handleConfirm(geofencePrompt)} disabled={confirming === geofencePrompt.id}
-                  style={{ flex: 1, padding: '8px 0', background: '#16a34a', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
-                  {confirming === geofencePrompt.id ? 'Confirming...' : 'Yes, looks right'}
-                </button>
-                <button onClick={() => { setReportModal(geofencePrompt); setReportType('price_update'); setGeofencePrompt(null) }}
-                  style={{ flex: 1, padding: '8px 0', background: '#f9fafb', color: '#374151', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, cursor: 'pointer' }}>
-                  Update price
-                </button>
-                <button onClick={() => setGeofencePrompt(null)}
-                  style={{ padding: '8px 10px', background: 'transparent', color: '#9ca3af', border: 'none', cursor: 'pointer', fontSize: 13 }}>✕</button>
+                <button onClick={() => setGeofencePrompt(null)} style={{ flex: 1, padding: '8px 0', background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 6, fontSize: 12, fontWeight: 500, cursor: 'pointer' }}>Yes, correct</button>
+                <button onClick={() => { setReportModal(geofencePrompt); setGeofencePrompt(null) }} style={{ flex: 1, padding: '8px 0', background: '#1e293b', color: '#94a3b8', border: '1px solid #334155', borderRadius: 6, fontSize: 12, cursor: 'pointer' }}>Update price</button>
+                <button onClick={() => setGeofencePrompt(null)} style={{ padding: '8px 10px', background: 'transparent', color: '#475569', border: 'none', cursor: 'pointer', fontSize: 16 }}>✕</button>
               </div>
             </div>
           )}
 
-          {confirmResult && (
-            <div style={{ position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 10, padding: '10px 16px', zIndex: 600, textAlign: 'center', whiteSpace: 'nowrap' }}>
-              <div style={{ fontSize: 13, fontWeight: 500, color: '#15803d' }}>{confirmResult.message}</div>
-              {confirmResult.county && <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>Helping drivers in {confirmResult.county}</div>}
-            </div>
-          )}
-
+          {/* Station detail panel */}
           {selected && (
-            <div style={{ position: 'absolute', bottom: 0, right: 0, width: 300, background: '#fff', borderTop: '1px solid #e5e7eb', borderLeft: '1px solid #e5e7eb', borderRadius: '10px 0 0 0', padding: 16, zIndex: 10 }}>
-              <button onClick={() => setSelected(null)} style={{ position: 'absolute', top: 10, right: 10, background: '#f3f4f6', border: 'none', borderRadius: 5, width: 22, height: 22, cursor: 'pointer', fontSize: 14, color: '#6b7280' }}>×</button>
-              <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 2 }}>{selected.name}</div>
-              <div style={{ fontSize: 12, color: '#6b7280', fontFamily: 'monospace', marginBottom: 4 }}>{selected.brand} · {selected.county}</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                <FreshnessTag dateStr={selected.latestPrice?.scraped_at} />
-                <ConfidenceDots confidence={selected.latestPrice?.confidence ?? 3} />
+            <div style={{ position: 'absolute', bottom: 0, right: 0, width: 300, background: 'rgba(15,23,42,0.97)', backdropFilter: 'blur(12px)', borderTop: '1px solid #1e293b', borderLeft: '1px solid #1e293b', borderRadius: '10px 0 0 0', padding: 16, zIndex: 10, animation: 'slideUp 0.2s ease-out' }}>
+              <button onClick={() => setSelected(null)} style={{ position: 'absolute', top: 12, right: 12, background: '#1e293b', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 14, color: '#475569' }}>×</button>
+              {/* Brand colour accent bar at top of panel */}
+              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, borderRadius: '10px 0 0 0', background: getBrandColor(selected.brand) }} />
+              <div style={{ paddingRight: 28, marginBottom: 10, marginTop: 6 }}>
+                <div style={{ fontWeight: 600, fontSize: 14, color: '#f1f5f9', letterSpacing: '-0.01em', marginBottom: 2 }}>{selected.name}</div>
+                <div style={{ fontSize: 10, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 500 }}>{selected.brand} · {selected.county}</div>
               </div>
+              <div style={{ marginBottom: 12 }}><FreshnessDot dateStr={selected.reportedAt} /></div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
-                <div style={{ padding: 10, borderRadius: 7, border: '1px solid #e5e7eb', background: '#f9fafb', textAlign: 'center' }}>
-                  <div style={{ fontSize: 10, textTransform: 'uppercase', color: '#9ca3af', letterSpacing: '0.4px', marginBottom: 3 }}>Petrol</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'monospace', color: STATUS_COLOR[selected.petrolStatus?.status ?? 'unknown'] }}>€{Number(selected.latestPrice?.petrol_price ?? 0).toFixed(3)}</div>
-                  <div style={{ fontSize: 10, color: STATUS_COLOR[selected.petrolStatus?.status ?? 'unknown'], display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                    <AvailabilityDot status={selected.petrolStatus?.status} size={6} />
-                    {selected.petrolStatus?.status ?? 'unknown'}
+                {[{ label: 'Petrol', price: selected.petrolPrice }, { label: 'Diesel', price: selected.dieselPrice }].map(({ label, price }) => (
+                  <div key={label} style={{ padding: '12px 10px', borderRadius: 8, border: `1px solid ${price ? getPriceColor(price) + '40' : '#1e293b'}`, background: '#0f172a', textAlign: 'center' }}>
+                    <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#334155', letterSpacing: '0.1em', marginBottom: 6, fontWeight: 600 }}>{label}</div>
+                    <div style={{ fontSize: 22, fontWeight: 700, fontFamily: '"DM Mono", monospace', color: getPriceColor(price), lineHeight: 1, letterSpacing: '-0.02em' }}>
+                      {price ? `€${Number(price).toFixed(3)}` : '—'}
+                    </div>
                   </div>
-                </div>
-                <div style={{ padding: 10, borderRadius: 7, border: '1px solid #e5e7eb', background: '#f9fafb', textAlign: 'center' }}>
-                  <div style={{ fontSize: 10, textTransform: 'uppercase', color: '#9ca3af', letterSpacing: '0.4px', marginBottom: 3 }}>Diesel</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'monospace', color: STATUS_COLOR[selected.dieselStatus?.status ?? 'unknown'] }}>€{Number(selected.latestPrice?.diesel_price ?? 0).toFixed(3)}</div>
-                  <div style={{ fontSize: 10, color: STATUS_COLOR[selected.dieselStatus?.status ?? 'unknown'], display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                    <AvailabilityDot status={selected.dieselStatus?.status} size={6} />
-                    {selected.dieselStatus?.status ?? 'unknown'}
+                ))}
+              </div>
+              <div style={{ fontSize: 11, borderTop: '1px solid #1e293b', paddingTop: 10, marginBottom: 12 }}>
+                {[
+                  { label: 'Address', value: selected.address ?? '—' },
+                  { label: 'County', value: selected.county },
+                  ...(userPos ? [{ label: 'Distance', value: `${distKm(userPos, selected).toFixed(1)} km` }] : []),
+                  { label: 'Source', value: selected.source ?? '—' },
+                ].map(({ label, value }) => (
+                  <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', color: '#475569' }}>
+                    <span>{label}</span>
+                    <span style={{ color: '#94a3b8', textAlign: 'right', maxWidth: 180 }}>{value}</span>
                   </div>
-                </div>
+                ))}
               </div>
-              <div style={{ fontSize: 12, borderTop: '1px solid #f3f4f6', paddingTop: 8, marginBottom: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: '#9ca3af' }}>Address</span><span>{selected.address}</span></div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: '#9ca3af' }}>County</span><span>{selected.county}</span></div>
-                {userPos && <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: '#9ca3af' }}>Distance</span><span>{distKm(userPos, selected).toFixed(1)} km</span></div>}
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}><span style={{ color: '#9ca3af' }}>Source</span><span>{selected.latestPrice?.source}</span></div>
-              </div>
-              <button onClick={() => handleConfirm(selected)} disabled={confirming === selected.id}
-                style={{ width: '100%', padding: 9, background: '#16a34a', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer', marginBottom: 6 }}>
-                {confirming === selected.id ? 'Confirming...' : 'Confirm prices are correct'}
-              </button>
-              <button onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${selected.lat},${selected.lng}`, '_blank')}
-                style={{ width: '100%', padding: 9, background: '#1d4ed8', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer', marginBottom: 6 }}>
-                Navigate →
-              </button>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={() => { setReportModal(selected); setReportType('price_update'); setReportForm({}) }}
-                  style={{ flex: 1, padding: 7, background: '#f9fafb', color: '#374151', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 12, cursor: 'pointer' }}>
-                  Update price
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <button onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${selected.lat},${selected.lng}`, '_blank')}
+                  style={{ padding: 10, background: '#2563eb', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', letterSpacing: '0.03em' }}>
+                  Navigate →
                 </button>
-                <button onClick={() => { setReportModal(selected); setReportType('incorrect_price'); setReportForm({}) }}
-                  style={{ flex: 1, padding: 7, background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 7, fontSize: 12, cursor: 'pointer' }}>
-                  Report error
+                <button onClick={() => { setReportModal(selected); setReportForm({}) }}
+                  style={{ padding: 10, background: 'transparent', color: '#60a5fa', border: '1px solid #334155', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontWeight: 500 }}>
+                  Update price
                 </button>
               </div>
             </div>
           )}
         </div>
 
-        {/* MOBILE STICKY BOTTOM BAR */}
-        <div className="mobile-bar" style={{ display: 'none', position: 'absolute', bottom: 0, left: 0, right: 0, background: '#fff', borderTop: '1px solid #e5e7eb', flexDirection: 'column', zIndex: 600 }}>
-          <div onClick={() => setMobileListOpen(v => !v)} style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
-            <div style={{ display: 'flex', gap: 16 }}>
-              <div>
-                <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#6b7280', letterSpacing: '0.4px' }}>Cheapest petrol</div>
-                <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace', color: '#16a34a' }}>{cheapest.cheapestPetrol ? `€${Number(cheapest.cheapestPetrol.petrol_price).toFixed(3)}` : '—'}</div>
-                <div style={{ fontSize: 10, color: '#9ca3af' }}>{cheapest.cheapestPetrol?.town ?? '—'}</div>
-              </div>
-              <div style={{ width: 1, background: '#e5e7eb' }} />
-              <div>
-                <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#6b7280', letterSpacing: '0.4px' }}>Cheapest diesel</div>
-                <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace', color: '#d97706' }}>{cheapest.cheapestDiesel ? `€${Number(cheapest.cheapestDiesel.diesel_price).toFixed(3)}` : '—'}</div>
-                <div style={{ fontSize: 10, color: '#9ca3af' }}>{cheapest.cheapestDiesel?.town ?? '—'}</div>
-              </div>
+        {/* MOBILE BOTTOM BAR */}
+        <div className="mobile-bar" style={{ display: 'none', position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(15,23,42,0.97)', backdropFilter: 'blur(12px)', borderTop: '1px solid #1e293b', flexDirection: 'column', zIndex: 600 }}>
+          <div onClick={() => setMobileListOpen(v => !v)} style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+            <div style={{ display: 'flex', gap: 20 }}>
+              {[
+                { label: 'Petrol', data: displayCheapest.petrol, color: '#22c55e' },
+                { label: 'Diesel', data: displayCheapest.diesel, color: '#f59e0b' },
+              ].map(({ label, data, color }) => (
+                <div key={label} onClick={e => { e.stopPropagation(); data?.station_id && flyToStation(data.station_id) }}>
+                  <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#475569', letterSpacing: '0.08em' }}>{label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, fontFamily: '"DM Mono", monospace', color }}>
+                    {data ? `€${Number(data.price).toFixed(3)}` : '—'}
+                  </div>
+                  <div style={{ fontSize: 10, color: '#475569' }}>{data?.station_name ?? '—'}</div>
+                </div>
+              ))}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-              <button
-                onClick={e => { e.stopPropagation(); locateMe() }}
-                disabled={locating}
-                style={{ padding: '8px 14px', background: locating ? '#93c5fd' : '#1d4ed8', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: locating ? 'wait' : 'pointer', minWidth: 90 }}
-              >
-                {locating ? 'Finding...' : 'Near me'}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+              <button onClick={e => { e.stopPropagation(); locateMe() }} disabled={locating}
+                style={{ padding: '8px 14px', background: locating ? '#1e40af' : '#2563eb', color: 'white', border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: locating ? 'wait' : 'pointer', letterSpacing: '0.05em' }}>
+                {locating ? '...' : '⊕ NEAR ME'}
               </button>
-              <div style={{ fontSize: 10, color: '#9ca3af' }}>{mobileListOpen ? '▼ Hide' : '▲ Stations'}</div>
+              <div style={{ fontSize: 9, color: '#334155', letterSpacing: '0.08em' }}>{mobileListOpen ? '▼ HIDE' : '▲ STATIONS'}</div>
             </div>
           </div>
+          {locateError && <div style={{ margin: '0 12px 8px', padding: '6px 10px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 6, fontSize: 11, color: '#ef4444' }}>{locateError}</div>}
 
-          {locateError && (
-            <div style={{ margin: '0 12px 8px', padding: '6px 10px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 11, color: '#b91c1c' }}>
-              {locateError}
+          {/* Mobile station detail */}
+          {selected && !mobileListOpen && (
+            <div style={{ padding: '12px 16px', borderTop: '1px solid #1e293b', animation: 'slideUp 0.2s ease-out' }}>
+              {/* Brand colour bar at top of mobile detail */}
+              <div style={{ height: 2, borderRadius: 1, background: getBrandColor(selected.brand), marginBottom: 10 }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: '#f1f5f9' }}>{selected.name}</div>
+                  <div style={{ fontSize: 10, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}>{selected.county}</div>
+                </div>
+                <button onClick={() => setSelected(null)} style={{ background: '#1e293b', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 14, color: '#475569', flexShrink: 0 }}>×</button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                <div style={{ padding: '8px', borderRadius: 7, border: '1px solid #1e293b', background: '#0f172a', textAlign: 'center' }}>
+                  <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Petrol</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, fontFamily: '"DM Mono", monospace', color: getPriceColor(selected.petrolPrice) }}>
+                    {selected.petrolPrice ? `€${Number(selected.petrolPrice).toFixed(3)}` : '—'}
+                  </div>
+                </div>
+                <div style={{ padding: '8px', borderRadius: 7, border: '1px solid #1e293b', background: '#0f172a', textAlign: 'center' }}>
+                  <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Diesel</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, fontFamily: '"DM Mono", monospace', color: getPriceColor(selected.dieselPrice) }}>
+                    {selected.dieselPrice ? `€${Number(selected.dieselPrice).toFixed(3)}` : '—'}
+                  </div>
+                </div>
+                <button onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${selected.lat},${selected.lng}`, '_blank')}
+                  style={{ padding: '8px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                  Go →
+                </button>
+              </div>
             </div>
           )}
 
           {mobileListOpen && (
-            <div style={{ maxHeight: '55vh', overflowY: 'auto', padding: '0 8px 8px', borderTop: '1px solid #f3f4f6' }}>
-              <div style={{ padding: '8px 4px' }}>
-                <SearchBar mobile />
-                {searching && <div style={{ fontSize: 11, color: '#6b7280', textAlign: 'center', marginTop: 4 }}>Searching...</div>}
-                {searchGeoResult && (
-                  <div style={{ marginTop: 6, padding: '5px 10px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 6, fontSize: 11, color: '#15803d', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Stations near {search}</span>
-                    <button onClick={clearSearch} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}>×</button>
-                  </div>
-                )}
+            <div style={{ maxHeight: '55vh', overflowY: 'auto', padding: '0 10px 8px', borderTop: '1px solid #1e293b' }}>
+              <div style={{ padding: '8px 0' }}>
+                <SearchBar
+                  search={search}
+                  onSearchChange={handleSearchChange}
+                  onSearchEnter={geocodeSearch}
+                  onClear={clearSearch}
+                  onLocate={locateMe}
+                  locating={locating}
+                />
               </div>
-              <div style={{ display: 'flex', gap: 5, padding: '4px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 4, marginBottom: 8, background: '#1e293b', borderRadius: 6, padding: 3 }}>
                 {['all', 'petrol', 'diesel'].map(f => (
-                  <button key={f} onClick={() => setFuelFilter(f)} style={{ padding: '4px 12px', borderRadius: 20, border: '1px solid', fontSize: 12, cursor: 'pointer', background: fuelFilter === f ? '#1d4ed8' : '#f9fafb', color: fuelFilter === f ? 'white' : '#6b7280', borderColor: fuelFilter === f ? '#1d4ed8' : '#e5e7eb' }}>
+                  <button key={f} onClick={() => setFuelFilter(f)}
+                    style={{ flex: 1, padding: '5px 0', borderRadius: 4, border: 'none', fontSize: 11, cursor: 'pointer', background: fuelFilter === f ? '#334155' : 'transparent', color: fuelFilter === f ? '#e2e8f0' : '#475569' }}>
                     {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
                   </button>
                 ))}
-                <button onClick={() => setAvailOnly(v => !v)} style={{ padding: '4px 12px', borderRadius: 20, border: '1px solid', fontSize: 12, cursor: 'pointer', background: availOnly ? '#16a34a' : '#f9fafb', color: availOnly ? 'white' : '#6b7280', borderColor: availOnly ? '#16a34a' : '#e5e7eb' }}>
-                  Available
-                </button>
               </div>
-              {filtered.length === 0 && !searching && (
-                <div style={{ padding: 20, textAlign: 'center', color: '#9ca3af' }}>
-                  <div style={{ fontSize: 13 }}>No stations found near "{search}"</div>
-                  <div style={{ fontSize: 11, marginTop: 4 }}>Try a different town or county name</div>
+              <div style={{ marginBottom: 8 }}>
+                <CountySelect value={countyFilter} onChange={setCountyFilter} countyCounts={countyCounts} />
+              </div>
+              {filtered.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: '#334155', fontSize: 12 }}>{countyFilter ? `No stations in ${countyFilter}` : 'No stations found'}</div>}
+              {filtered.map(s => (
+                <div key={s.id} ref={el => { stationCardRefs.current[s.id] = el }}>
+                  <StationCard
+                    s={s}
+                    isSelected={selected?.id === s.id}
+                    isCheapestPetrol={displayCheapest.petrol?.station_id === s.id}
+                    isCheapestDiesel={displayCheapest.diesel?.station_id === s.id}
+                    fuelFilter={fuelFilter}
+                    userPos={userPos}
+                    onClick={() => {
+                      setSelected(s)
+                      setMobileListOpen(false)
+                      map.current?.flyTo({ center: [s.lng, s.lat], zoom: Math.max(map.current?.getZoom() ?? 12, 13) })
+                    }}
+                  />
                 </div>
-              )}
-              {filtered.map(s => <StationCard key={s.id} s={s} />)}
+              ))}
             </div>
           )}
         </div>
@@ -694,71 +1282,37 @@ export default function Home() {
 
       {/* Report modal */}
       {reportModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end', padding: 16 }}>
-          <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', width: 310, padding: 16 }}>
-            <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>
-              {reportType === 'incorrect_price' ? 'Report incorrect price' : 'Update prices'}
-            </div>
-            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>{reportModal.name} · {reportModal.county}</div>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end', padding: 16 }}>
+          <div style={{ background: '#0f172a', borderRadius: 12, border: '1px solid #1e293b', width: 310, padding: 18, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: '#e2e8f0', marginBottom: 4 }}>Update prices</div>
+            <div style={{ fontSize: 11, color: '#475569', marginBottom: 14 }}>{reportModal.name} · {reportModal.county}</div>
             {submitResult ? (
-              <div>
-                {submitResult.error ? (
-                  <div style={{ color: '#dc2626', fontSize: 13, textAlign: 'center', padding: '8px 0' }}>{submitResult.error}</div>
-                ) : (
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 14, fontWeight: 500, color: '#16a34a', marginBottom: 6 }}>Submitted — thanks!</div>
-                    {submitResult.impact && (
-                      <div style={{ fontSize: 12, color: '#374151', background: '#f0fdf4', borderRadius: 7, padding: '8px 10px', marginBottom: 8 }}>
-                        {submitResult.impact.message}
-                      </div>
-                    )}
-                    {submitResult.contributor && (
-                      <div style={{ fontSize: 11, color: '#6b7280' }}>
-                        Your score: {submitResult.contributor.score} · {submitResult.contributor.submissions} updates
-                        {submitResult.contributor.streak_days > 1 && ` · ${submitResult.contributor.streak_days} day streak`}
-                      </div>
-                    )}
-                  </div>
-                )}
+              <div style={{ textAlign: 'center', padding: '12px 0' }}>
+                {submitResult.error
+                  ? <div style={{ color: '#ef4444', fontSize: 13 }}>{submitResult.error}</div>
+                  : <div style={{ fontSize: 14, fontWeight: 500, color: '#22c55e' }}>Submitted — thanks!</div>
+                }
               </div>
             ) : (
               <>
-                <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-                  {['price_update', 'incorrect_price'].map(t => (
-                    <button key={t} onClick={() => setReportType(t)} style={{ flex: 1, padding: '6px 0', borderRadius: 7, border: '1px solid', fontSize: 12, cursor: 'pointer', background: reportType === t ? (t === 'incorrect_price' ? '#fef2f2' : '#eff6ff') : '#f9fafb', color: reportType === t ? (t === 'incorrect_price' ? '#b91c1c' : '#1d4ed8') : '#6b7280', borderColor: reportType === t ? (t === 'incorrect_price' ? '#fecaca' : '#bfdbfe') : '#e5e7eb' }}>
-                      {t === 'price_update' ? 'Update price' : 'Report error'}
-                    </button>
-                  ))}
-                </div>
-                <label style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 3 }}>Petrol price (€/L)</label>
-                <input type="number" step="0.001" placeholder={`Current: €${Number(reportModal.latestPrice?.petrol_price ?? 0).toFixed(3)}`}
-                  onChange={e => setReportForm(f => ({ ...f, petrol_price: e.target.value }))}
-                  style={{ width: '100%', padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, marginBottom: 8, boxSizing: 'border-box' }} />
-                <label style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 3 }}>Diesel price (€/L)</label>
-                <input type="number" step="0.001" placeholder={`Current: €${Number(reportModal.latestPrice?.diesel_price ?? 0).toFixed(3)}`}
-                  onChange={e => setReportForm(f => ({ ...f, diesel_price: e.target.value }))}
-                  style={{ width: '100%', padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, marginBottom: 8, boxSizing: 'border-box' }} />
-                <label style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 3 }}>Petrol availability</label>
-                <select onChange={e => setReportForm(f => ({ ...f, petrol_status: e.target.value }))}
-                  style={{ width: '100%', padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, marginBottom: 8 }}>
-                  <option value="available">Available</option>
-                  <option value="unavailable">Unavailable</option>
-                  <option value="unknown">Unknown</option>
-                </select>
-                <label style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 3 }}>Diesel availability</label>
-                <select onChange={e => setReportForm(f => ({ ...f, diesel_status: e.target.value }))}
-                  style={{ width: '100%', padding: '6px 10px', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, marginBottom: 12 }}>
-                  <option value="available">Available</option>
-                  <option value="unavailable">Unavailable</option>
-                  <option value="unknown">Unknown</option>
-                </select>
-                <div style={{ display: 'flex', gap: 8 }}>
+                {[
+                  { label: 'Petrol price (€/L)', key: 'petrol_price', placeholder: reportModal.petrolPrice ? `Current: €${Number(reportModal.petrolPrice).toFixed(3)}` : 'e.g. 1.899' },
+                  { label: 'Diesel price (€/L)', key: 'diesel_price', placeholder: reportModal.dieselPrice ? `Current: €${Number(reportModal.dieselPrice).toFixed(3)}` : 'e.g. 1.689' },
+                ].map(({ label, key, placeholder }) => (
+                  <div key={key}>
+                    <label style={{ fontSize: 11, color: '#475569', display: 'block', marginBottom: 4 }}>{label}</label>
+                    <input type="number" step="0.001" placeholder={placeholder}
+                      onChange={e => setReportForm(f => ({ ...f, [key]: e.target.value }))}
+                      style={{ width: '100%', padding: '8px 10px', border: '1px solid #334155', borderRadius: 6, fontSize: 13, marginBottom: 10, boxSizing: 'border-box', background: '#1e293b', color: '#e2e8f0', fontFamily: 'inherit', outline: 'none' }} />
+                  </div>
+                ))}
+                <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                   <button onClick={() => { setReportModal(null); setSubmitResult(null) }}
-                    style={{ flex: 1, padding: 8, background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 7, fontSize: 13, cursor: 'pointer', color: '#6b7280' }}>
+                    style={{ flex: 1, padding: 9, background: 'transparent', border: '1px solid #1e293b', borderRadius: 6, fontSize: 12, cursor: 'pointer', color: '#475569' }}>
                     Cancel
                   </button>
                   <button onClick={submitReport} disabled={submitting}
-                    style={{ flex: 1, padding: 8, background: reportType === 'incorrect_price' ? '#dc2626' : '#16a34a', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 500, cursor: 'pointer', color: 'white' }}>
+                    style={{ flex: 1, padding: 9, background: '#22c55e', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', color: '#0f172a', letterSpacing: '0.03em' }}>
                     {submitting ? 'Submitting...' : 'Submit'}
                   </button>
                 </div>
