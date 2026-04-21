@@ -84,7 +84,8 @@ export async function POST(request: NextRequest) {
   }
 
   // Refresh the materialised view so cheapest banner updates immediately
-  await supabaseAdmin.rpc('refresh_cheapest_view').catch(() => {
+  // Cast to Promise to avoid TypeScript complaining about PostgrestFilterBuilder
+  void (supabaseAdmin.rpc('refresh_cheapest_view') as unknown as Promise<any>).catch(() => {
     // Non-fatal — view will catch up on next scrape
   });
 
