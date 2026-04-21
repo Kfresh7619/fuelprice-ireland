@@ -32,6 +32,23 @@ function getPriceColor(price) {
   return '#ef4444'
 }
 
+// Price bar — visual indicator of where a price sits within the Irish spread
+// Range: €1.84 (cheapest discounters) → €1.99 (expensive rural)
+// Returns a filled bar proportional to the price position in this range
+function PriceBar({ price }) {
+  if (!price) return null
+  const MIN = 1.84
+  const MAX = 1.99
+  const pct = Math.min(100, Math.max(0, ((price - MIN) / (MAX - MIN)) * 100))
+  const color = getPriceColor(price)
+  return (
+    <div style={{ marginTop: 4, height: 3, borderRadius: 2, background: '#0f172a', overflow: 'hidden' }}>
+      <div style={{ width: `${pct}%`, height: '100%', borderRadius: 2, background: color, transition: 'width 0.3s ease' }} />
+    </div>
+  )
+}
+
+
 function getPrice(station, fuelType) {
   return station.prices?.find(p => p.fuel_type === fuelType) ?? null
 }
@@ -207,7 +224,7 @@ function StationCard({ s, isSelected, isCheapestPetrol, isCheapestDiesel, fuelFi
       )}
       {isAging && hasAnyPrice && (
         <div style={{ background: '#1c1505', borderBottom: '1px solid #1f1a05', padding: '3px 12px' }}>
-          <span style={{ fontSize: 9, color: '#78560a', letterSpacing: '0.04em' }}>Updated {timeAgo(s.reportedAt)}</span>
+          <span style={{ fontSize: 9, color: '#a16207', letterSpacing: '0.04em' }}>Updated {timeAgo(s.reportedAt)}</span>
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'stretch', padding: '12px 12px 12px 10px', gap: 10 }}>
@@ -218,10 +235,10 @@ function StationCard({ s, isSelected, isCheapestPetrol, isCheapestDiesel, fuelFi
               <div style={{ fontWeight: 600, fontSize: 13, color: isSelected ? '#93c5fd' : '#f1f5f9', lineHeight: 1.2, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {s.name}
               </div>
-              <div style={{ fontSize: 10, color: '#334155', marginTop: 2, fontWeight: 500, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+              <div style={{ fontSize: 10, color: '#64748b', marginTop: 2, fontWeight: 500, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
                 {s.county}
                 {s.brand && s.brand.toLowerCase() !== s.name.toLowerCase() && (
-                  <span style={{ color: '#1e3a5f', fontWeight: 400 }}> · {s.brand}</span>
+                  <span style={{ color: '#475569', fontWeight: 400 }}> · {s.brand}</span>
                 )}
               </div>
             </div>
@@ -237,27 +254,29 @@ function StationCard({ s, isSelected, isCheapestPetrol, isCheapestDiesel, fuelFi
             <div style={{ display: 'flex', gap: 6 }}>
               {fuelFilter !== 'diesel' && (
                 <div style={{ flex: 1, padding: '6px 8px', borderRadius: 6, background: '#080f1e', border: `1px solid ${isCheapestPetrol ? '#16a34a55' : '#1a2744'}`, textAlign: 'center' }}>
-                  <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 3, fontWeight: 600 }}>Petrol</div>
-                  <div style={{ fontSize: 17, fontWeight: 700, fontFamily: '"DM Mono", "Courier New", monospace', color: s.petrolPrice ? petrolColor : '#1e3a5f', lineHeight: 1, letterSpacing: '-0.02em' }}>
+                  <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3, fontWeight: 600 }}>Petrol</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, fontFamily: '"DM Mono", "Courier New", monospace', color: s.petrolPrice ? petrolColor : '#334155', lineHeight: 1, letterSpacing: '-0.02em' }}>
                     {s.petrolPrice ? `€${Number(s.petrolPrice).toFixed(3)}` : '—'}
                   </div>
-                  {isCheapestPetrol && <div style={{ fontSize: 8, color: '#16a34a', marginTop: 3, letterSpacing: '0.06em', fontWeight: 700 }}>CHEAPEST</div>}
+                  {s.petrolPrice && <PriceBar price={s.petrolPrice} />}
+                  {isCheapestPetrol && <div style={{ fontSize: 9, color: '#16a34a', marginTop: 3, letterSpacing: '0.06em', fontWeight: 700 }}>CHEAPEST</div>}
                 </div>
               )}
               {fuelFilter !== 'petrol' && (
                 <div style={{ flex: 1, padding: '6px 8px', borderRadius: 6, background: '#080f1e', border: `1px solid ${isCheapestDiesel ? '#d9770655' : '#1a2744'}`, textAlign: 'center' }}>
-                  <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 3, fontWeight: 600 }}>Diesel</div>
-                  <div style={{ fontSize: 17, fontWeight: 700, fontFamily: '"DM Mono", "Courier New", monospace', color: s.dieselPrice ? dieselColor : '#1e3a5f', lineHeight: 1, letterSpacing: '-0.02em' }}>
+                  <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3, fontWeight: 600 }}>Diesel</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, fontFamily: '"DM Mono", "Courier New", monospace', color: s.dieselPrice ? dieselColor : '#334155', lineHeight: 1, letterSpacing: '-0.02em' }}>
                     {s.dieselPrice ? `€${Number(s.dieselPrice).toFixed(3)}` : '—'}
                   </div>
-                  {isCheapestDiesel && <div style={{ fontSize: 8, color: '#d97706', marginTop: 3, letterSpacing: '0.06em', fontWeight: 700 }}>CHEAPEST</div>}
+                  {s.dieselPrice && <PriceBar price={s.dieselPrice} />}
+                  {isCheapestDiesel && <div style={{ fontSize: 9, color: '#f59e0b', marginTop: 3, letterSpacing: '0.06em', fontWeight: 700 }}>CHEAPEST</div>}
                 </div>
               )}
             </div>
           ) : (
             <div style={{ padding: '7px 10px', borderRadius: 6, background: '#080f1e', border: '1px solid #1a2744', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: 11, color: '#334155' }}>No price data</span>
-              <span style={{ fontSize: 8, color: '#1e3a5f', border: '1px solid #1a2744', borderRadius: 3, padding: '2px 5px', letterSpacing: '0.05em', fontWeight: 600, textTransform: 'uppercase' }}>Be first to report</span>
+              <span style={{ fontSize: 11, color: '#475569' }}>No price data</span>
+              <span style={{ fontSize: 9, color: '#64748b', border: '1px solid #334155', borderRadius: 3, padding: '2px 6px', letterSpacing: '0.05em', fontWeight: 600, textTransform: 'uppercase' }}>Be first to report</span>
             </div>
           )}
         </div>
@@ -1089,8 +1108,9 @@ export default function Home() {
                 ))}
               </div>
               {/* Toggle arrow */}
-              <div style={{ fontSize: 18, color: '#475569', transform: sheetState === 'open' ? 'rotate(180deg)' : 'none', transition: 'transform 0.3s' }}>
-                ↑
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                <div style={{ fontSize: 16, color: '#475569', transform: sheetState === 'open' ? 'rotate(180deg)' : 'none', transition: 'transform 0.3s' }}>↑</div>
+                <div style={{ fontSize: 9, color: '#334155', letterSpacing: '0.06em', textTransform: 'uppercase', transition: 'opacity 0.2s' }}>{sheetState === 'open' ? 'Close' : 'Stations'}</div>
               </div>
             </div>
           </div>
@@ -1102,7 +1122,7 @@ export default function Home() {
               <div style={{ height: 2, borderRadius: 1, background: getBrandColor(selected.brand), marginBottom: 8 }} />
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: '#f1f5f9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{selected.name}</div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: '#f1f5f9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '200px' }}>{selected.name}</div>
                   <div style={{ fontSize: 10, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}>{selected.county}</div>
                 </div>
                 <button onClick={() => setSelected(null)} style={{ background: '#1e293b', border: 'none', borderRadius: 4, width: 24, height: 24, cursor: 'pointer', fontSize: 14, color: '#475569', flexShrink: 0, marginLeft: 8 }}>×</button>
