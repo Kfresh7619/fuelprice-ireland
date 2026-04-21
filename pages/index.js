@@ -25,8 +25,6 @@ function freshnessState(dateStr) {
 
 function getPriceColor(price) {
   if (!price) return '#475569'
-  // Tiers calibrated to actual Irish retail spread (~€1.84–1.97 petrol)
-  // Compresses the range so colours are meaningfully differentiated
   if (price < 1.87) return '#22c55e'
   if (price < 1.91) return '#84cc16'
   if (price < 1.95) return '#fbbf24'
@@ -66,9 +64,6 @@ function distKm(pos, s) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-// Brand colour map — matched against brand name substring (case-insensitive)
-// Based on actual brand data: Circle K (317), Top (202), Applegreen (165),
-// Texaco (151), Maxol (141), Inver (55), Emo (54), Certa (28), Esso (27), etc.
 const BRAND_COLORS = {
   'circle k':    '#E31837',
   'applegreen':  '#00843D',
@@ -203,65 +198,24 @@ function StationCard({ s, isSelected, isCheapestPetrol, isCheapestDiesel, fuelFi
       onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}
       onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = '#0f172a' }}
     >
-      {/* Stale data — full-width amber warning banner */}
       {isStale && hasAnyPrice && (
-        <div style={{
-          background: '#431407',
-          borderBottom: '1px solid #7c2d12',
-          padding: '4px 12px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-        }}>
+        <div style={{ background: '#431407', borderBottom: '1px solid #7c2d12', padding: '4px 12px', display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ fontSize: 9, color: '#fb923c', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
             ⚠ Price may be outdated · {timeAgo(s.reportedAt)}
           </span>
         </div>
       )}
-
-      {/* Aging — subtle amber stripe */}
       {isAging && hasAnyPrice && (
-        <div style={{
-          background: '#1c1505',
-          borderBottom: '1px solid #1f1a05',
-          padding: '3px 12px',
-        }}>
-          <span style={{ fontSize: 9, color: '#78560a', letterSpacing: '0.04em' }}>
-            Updated {timeAgo(s.reportedAt)}
-          </span>
+        <div style={{ background: '#1c1505', borderBottom: '1px solid #1f1a05', padding: '3px 12px' }}>
+          <span style={{ fontSize: 9, color: '#78560a', letterSpacing: '0.04em' }}>Updated {timeAgo(s.reportedAt)}</span>
         </div>
       )}
-
-      {/* Card body */}
       <div style={{ display: 'flex', alignItems: 'stretch', padding: '12px 12px 12px 10px', gap: 10 }}>
-
-        {/* Brand colour bar */}
-        <div style={{
-          width: 3,
-          borderRadius: 2,
-          background: brandColor,
-          flexShrink: 0,
-          alignSelf: 'stretch',
-          minHeight: 40,
-          opacity: isSelected ? 1 : 0.85,
-        }} />
-
-        {/* Content */}
+        <div style={{ width: 3, borderRadius: 2, background: brandColor, flexShrink: 0, alignSelf: 'stretch', minHeight: 40, opacity: isSelected ? 1 : 0.85 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
-
-          {/* Top row: name + distance/freshness */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
             <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{
-                fontWeight: 600,
-                fontSize: 13,
-                color: isSelected ? '#93c5fd' : '#f1f5f9',
-                lineHeight: 1.2,
-                letterSpacing: '-0.01em',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}>
+              <div style={{ fontWeight: 600, fontSize: 13, color: isSelected ? '#93c5fd' : '#f1f5f9', lineHeight: 1.2, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {s.name}
               </div>
               <div style={{ fontSize: 10, color: '#334155', marginTop: 2, fontWeight: 500, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
@@ -271,91 +225,39 @@ function StationCard({ s, isSelected, isCheapestPetrol, isCheapestDiesel, fuelFi
                 )}
               </div>
             </div>
-
-            {/* Distance + freshness dot */}
             <div style={{ flexShrink: 0, marginLeft: 8, textAlign: 'right' }}>
-              {distStr && (
-                <div style={{ fontSize: 11, color: '#475569', fontFamily: '"DM Mono", monospace', lineHeight: 1.2 }}>
-                  {distStr}
-                </div>
-              )}
+              {distStr && <div style={{ fontSize: 11, color: '#475569', fontFamily: '"DM Mono", monospace', lineHeight: 1.2 }}>{distStr}</div>}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 3, marginTop: 3 }}>
-                <span style={{
-                  width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                  background: freshness === 'fresh' ? '#22c55e' : freshness === 'aging' ? '#f59e0b' : '#ef4444',
-                  boxShadow: freshness === 'fresh' ? '0 0 4px #22c55e' : 'none',
-                }} />
-                {freshness === 'fresh' && (
-                  <span style={{ fontSize: 9, color: '#22c55e' }}>{timeAgo(s.reportedAt)}</span>
-                )}
+                <span style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, background: freshness === 'fresh' ? '#22c55e' : freshness === 'aging' ? '#f59e0b' : '#ef4444', boxShadow: freshness === 'fresh' ? '0 0 4px #22c55e' : 'none' }} />
+                {freshness === 'fresh' && <span style={{ fontSize: 9, color: '#22c55e' }}>{timeAgo(s.reportedAt)}</span>}
               </div>
             </div>
           </div>
-
-          {/* Price blocks — or no-data state */}
           {hasAnyPrice ? (
             <div style={{ display: 'flex', gap: 6 }}>
               {fuelFilter !== 'diesel' && (
-                <div style={{
-                  flex: 1,
-                  padding: '6px 8px',
-                  borderRadius: 6,
-                  background: '#080f1e',
-                  border: `1px solid ${isCheapestPetrol ? '#16a34a55' : '#1a2744'}`,
-                  textAlign: 'center',
-                }}>
+                <div style={{ flex: 1, padding: '6px 8px', borderRadius: 6, background: '#080f1e', border: `1px solid ${isCheapestPetrol ? '#16a34a55' : '#1a2744'}`, textAlign: 'center' }}>
                   <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 3, fontWeight: 600 }}>Petrol</div>
                   <div style={{ fontSize: 17, fontWeight: 700, fontFamily: '"DM Mono", "Courier New", monospace', color: s.petrolPrice ? petrolColor : '#1e3a5f', lineHeight: 1, letterSpacing: '-0.02em' }}>
                     {s.petrolPrice ? `€${Number(s.petrolPrice).toFixed(3)}` : '—'}
                   </div>
-                  {isCheapestPetrol && (
-                    <div style={{ fontSize: 8, color: '#16a34a', marginTop: 3, letterSpacing: '0.06em', fontWeight: 700 }}>CHEAPEST</div>
-                  )}
+                  {isCheapestPetrol && <div style={{ fontSize: 8, color: '#16a34a', marginTop: 3, letterSpacing: '0.06em', fontWeight: 700 }}>CHEAPEST</div>}
                 </div>
               )}
               {fuelFilter !== 'petrol' && (
-                <div style={{
-                  flex: 1,
-                  padding: '6px 8px',
-                  borderRadius: 6,
-                  background: '#080f1e',
-                  border: `1px solid ${isCheapestDiesel ? '#d9770655' : '#1a2744'}`,
-                  textAlign: 'center',
-                }}>
+                <div style={{ flex: 1, padding: '6px 8px', borderRadius: 6, background: '#080f1e', border: `1px solid ${isCheapestDiesel ? '#d9770655' : '#1a2744'}`, textAlign: 'center' }}>
                   <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 3, fontWeight: 600 }}>Diesel</div>
                   <div style={{ fontSize: 17, fontWeight: 700, fontFamily: '"DM Mono", "Courier New", monospace', color: s.dieselPrice ? dieselColor : '#1e3a5f', lineHeight: 1, letterSpacing: '-0.02em' }}>
                     {s.dieselPrice ? `€${Number(s.dieselPrice).toFixed(3)}` : '—'}
                   </div>
-                  {isCheapestDiesel && (
-                    <div style={{ fontSize: 8, color: '#d97706', marginTop: 3, letterSpacing: '0.06em', fontWeight: 700 }}>CHEAPEST</div>
-                  )}
+                  {isCheapestDiesel && <div style={{ fontSize: 8, color: '#d97706', marginTop: 3, letterSpacing: '0.06em', fontWeight: 700 }}>CHEAPEST</div>}
                 </div>
               )}
             </div>
           ) : (
-            /* No price data state */
-            <div style={{
-              padding: '7px 10px',
-              borderRadius: 6,
-              background: '#080f1e',
-              border: '1px solid #1a2744',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}>
+            <div style={{ padding: '7px 10px', borderRadius: 6, background: '#080f1e', border: '1px solid #1a2744', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: 11, color: '#334155' }}>No price data</span>
-              <span style={{
-                fontSize: 8,
-                color: '#1e3a5f',
-                border: '1px solid #1a2744',
-                borderRadius: 3,
-                padding: '2px 5px',
-                letterSpacing: '0.05em',
-                fontWeight: 600,
-                textTransform: 'uppercase',
-              }}>
-                Be first to report
-              </span>
+              <span style={{ fontSize: 8, color: '#1e3a5f', border: '1px solid #1a2744', borderRadius: 3, padding: '2px 5px', letterSpacing: '0.05em', fontWeight: 600, textTransform: 'uppercase' }}>Be first to report</span>
             </div>
           )}
         </div>
@@ -404,7 +306,8 @@ export default function Home() {
   const [sortBy, setSortBy] = useState('price')
   const [search, setSearch] = useState('')
   const [userPos, setUserPos] = useState(null)
-  const [mobileListOpen, setMobileListOpen] = useState(false)
+  // Mobile sheet: 'collapsed' | 'peek' | 'open'
+  const [sheetState, setSheetState] = useState('peek')
   const [locating, setLocating] = useState(false)
   const [locateError, setLocateError] = useState(null)
   const [searching, setSearching] = useState(false)
@@ -428,7 +331,6 @@ export default function Home() {
   useEffect(() => { selectedRef.current = selected }, [selected])
   useEffect(() => { mapReadyRef.current = mapReady }, [mapReady])
 
-  // Scroll selected into view
   useEffect(() => {
     if (!selected) return
     const card = stationCardRefs.current[selected.id]
@@ -437,14 +339,12 @@ export default function Home() {
     }
   }, [selected])
 
-  // Update map when selected changes
   useEffect(() => {
     if (map.current && mapReady && stations.length) {
       updateMapSource(map.current, stations, selected?.id)
     }
   }, [selected, mapReady])
 
-  // Escape key
   useEffect(() => {
     const handler = (e) => { if (e.key === 'Escape') setSelected(null) }
     window.addEventListener('keydown', handler)
@@ -459,7 +359,6 @@ export default function Home() {
     return counts
   }, [allStations])
 
-  // Initial load
   useEffect(() => {
     setLoading(true)
     fetch('/api/stations/all')
@@ -475,7 +374,6 @@ export default function Home() {
       .catch(() => setLoading(false))
   }, [])
 
-  // County filter
   useEffect(() => {
     setSelected(null)
     if (!countyFilter) {
@@ -494,7 +392,6 @@ export default function Home() {
     }
   }, [countyFilter, allStations, mapReady])
 
-  // Cheapest prices — national baseline from materialised view
   useEffect(() => {
     fetch('/api/prices/latest')
       .then(r => r.json())
@@ -512,10 +409,7 @@ export default function Home() {
       })
   }, [])
 
-  // When in near-me or search mode, override the cheapest banner with the
-  // cheapest station from the currently loaded set — more relevant to the user
   const localCheapest = useMemo(() => {
-    // Only override when user has a position and stations are a local subset
     if (!userPos || stations.length === allStations.length) return null
     let petrol = null
     let diesel = null
@@ -532,14 +426,12 @@ export default function Home() {
 
   const displayCheapest = localCheapest ?? cheapest
 
-  // Geofence
   useEffect(() => {
     if (!userPos || !allStations.length) return
     const nearby = allStations.filter(s => distKm(userPos, s) < 0.3)
     if (nearby.length > 0 && !geofencePrompt) setGeofencePrompt(nearby[0])
   }, [userPos, allStations])
 
-  // Map init
   useEffect(() => {
     if (map.current || !mapContainer.current) return
     map.current = new mapboxgl.Map({
@@ -553,7 +445,6 @@ export default function Home() {
     map.current.on('dragstart', () => setSelected(null))
   }, [])
 
-  // Cluster layers init
   useEffect(() => {
     if (!mapReady || !map.current || !stations.length || layersInitialised.current) return
 
@@ -587,8 +478,6 @@ export default function Home() {
       cluster: true,
       clusterMaxZoom: 12,
       clusterRadius: 80,
-      // Aggregate min_price across all points in a cluster
-      // This lets the cluster bubble inherit the colour of its cheapest member
       clusterProperties: {
         min_price: ['min', ['get', 'min_price']],
         has_any_price: ['max', ['get', 'hasPrice']],
@@ -601,8 +490,6 @@ export default function Home() {
       source: 'stations',
       filter: ['has', 'point_count'],
       paint: {
-        // Colour clusters by their cheapest member's price tier
-        // Falls back to slate if no priced stations in cluster
         'circle-color': [
           'case',
           ['==', ['get', 'has_any_price'], 0], '#0f172a',
@@ -612,13 +499,7 @@ export default function Home() {
           ['<', ['get', 'min_price'], 1.99], '#c2410c',
           '#991b1b'
         ],
-        'circle-radius': [
-          'step', ['get', 'point_count'],
-          20,   5,
-          26,  20,
-          32,  60,
-          38
-        ],
+        'circle-radius': ['step', ['get', 'point_count'], 20, 5, 26, 20, 32, 60, 38],
         'circle-stroke-width': 1.5,
         'circle-stroke-color': [
           'case',
@@ -629,11 +510,7 @@ export default function Home() {
           ['<', ['get', 'min_price'], 1.99], '#f97316',
           '#ef4444'
         ],
-        'circle-opacity': [
-          'case',
-          ['==', ['get', 'has_any_price'], 0], 0.25,
-          0.92
-        ],
+        'circle-opacity': ['case', ['==', ['get', 'has_any_price'], 0], 0.25, 0.92],
       }
     })
 
@@ -643,19 +520,11 @@ export default function Home() {
       source: 'stations',
       filter: ['has', 'point_count'],
       layout: {
-        // Two-line label: cheapest price on top, station count below
-        // concat is used because Mapbox GL expressions don't support toFixed —
-        // prices are already 3dp floats so we slice to show 5 chars e.g. "1.873"
         'text-field': [
           'case',
           ['==', ['get', 'has_any_price'], 0],
           ['concat', ['get', 'point_count_abbreviated']],
-          ['concat',
-            '€',
-            ['slice', ['to-string', ['get', 'min_price']], 0, 5],
-            '\n',
-            ['get', 'point_count_abbreviated']
-          ]
+          ['concat', '€', ['slice', ['to-string', ['get', 'min_price']], 0, 5], '\n', ['get', 'point_count_abbreviated']]
         ],
         'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
         'text-size': 11,
@@ -673,12 +542,7 @@ export default function Home() {
       type: 'circle',
       source: 'stations',
       filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'isSelected'], 1]],
-      paint: {
-        'circle-color': '#60a5fa',
-        'circle-radius': 18,
-        'circle-opacity': 0.25,
-        'circle-stroke-width': 0,
-      }
+      paint: { 'circle-color': '#60a5fa', 'circle-radius': 18, 'circle-opacity': 0.25, 'circle-stroke-width': 0 }
     })
 
     map.current.addLayer({
@@ -688,21 +552,10 @@ export default function Home() {
       filter: ['!', ['has', 'point_count']],
       paint: {
         'circle-color': ['case', ['==', ['get', 'isSelected'], 1], '#60a5fa', ['get', 'color']],
-        // No-data markers are smaller and more transparent — priced markers dominate
-        'circle-radius': [
-          'case',
-          ['==', ['get', 'isSelected'], 1], 10,
-          ['==', ['get', 'hasPrice'], 1], 8,
-          5
-        ],
+        'circle-radius': ['case', ['==', ['get', 'isSelected'], 1], 10, ['==', ['get', 'hasPrice'], 1], 8, 5],
         'circle-stroke-width': ['case', ['==', ['get', 'isSelected'], 1], 2, 1],
         'circle-stroke-color': ['case', ['==', ['get', 'isSelected'], 1], 'white', 'rgba(255,255,255,0.15)'],
-        'circle-opacity': [
-          'case',
-          ['==', ['get', 'isSelected'], 1], 1,
-          ['==', ['get', 'hasPrice'], 1], ['get', 'stale'],
-          0.18  // no-data markers nearly invisible
-        ],
+        'circle-opacity': ['case', ['==', ['get', 'isSelected'], 1], 1, ['==', ['get', 'hasPrice'], 1], ['get', 'stale'], 0.18],
       }
     })
 
@@ -720,7 +573,7 @@ export default function Home() {
       const station = allStationsRef.current.find(s => s.id === props.id)
       if (station) {
         setSelected(station)
-        setMobileListOpen(false)
+        setSheetState('peek')
         map.current.flyTo({ center: [station.lng, station.lat], zoom: Math.max(map.current.getZoom(), 13) })
       }
     })
@@ -758,8 +611,6 @@ export default function Home() {
     }
     if (sortBy === 'price') {
       list.sort((a, b) => {
-        // Use the relevant price for the active fuel filter
-        // 'all' mode sorts by petrol price as primary
         const ap = fuelFilter === 'diesel' ? (a.dieselPrice ?? 99) : (a.petrolPrice ?? 99)
         const bp = fuelFilter === 'diesel' ? (b.dieselPrice ?? 99) : (b.petrolPrice ?? 99)
         return ap - bp
@@ -837,6 +688,7 @@ export default function Home() {
               const normalised = data.stations.map(normaliseStation)
               setStations(normalised)
               if (map.current && mapReady) updateMapSource(map.current, normalised, selected?.id)
+              setSheetState('open')
             }
           })
       },
@@ -898,9 +750,7 @@ export default function Home() {
         setAllStations(prev => updateList(prev))
         if (selectedRef.current?.id === normalised.id) setSelected(normalised)
       }
-    } catch (e) {
-      console.error('Failed to refresh station:', e)
-    }
+    } catch (e) { console.error('Failed to refresh station:', e) }
 
     setSubmitResult({ success: true })
     setTimeout(() => { setReportModal(null); setSubmitResult(null) }, 2500)
@@ -912,11 +762,15 @@ export default function Home() {
     ? `${filtered.length} stations in ${countyFilter}`
     : loading ? '...' : `${allStations.length} stations`
 
+  // Mobile sheet heights
+  const SHEET_PEEK_HEIGHT = 80     // just the handle + cheapest prices
+  const SHEET_OPEN_HEIGHT = '62vh' // station list visible
+
   return (
     <>
       <Head>
         <title>{selected ? `${selected.name} · FuelPrice Ireland` : 'FuelPrice Ireland'}</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <style>{`
           * { box-sizing: border-box; }
           body { margin: 0; font-family: 'DM Sans', system-ui, sans-serif; background: #0f172a; }
@@ -926,20 +780,22 @@ export default function Home() {
           ::-webkit-scrollbar-track { background: transparent; }
           ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
           @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+          @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
           @keyframes pulse { 0%,100%{opacity:0.4} 50%{opacity:0.8} }
           @media (max-width: 768px) {
-            .desktop-sidebar { display: none !important; }
-            .mobile-bar { display: flex !important; }
+            .desktop-only { display: none !important; }
+            .mobile-sheet { display: flex !important; }
           }
           @media (min-width: 769px) {
-            .mobile-bar { display: none !important; }
+            .mobile-sheet { display: none !important; }
           }
         `}</style>
       </Head>
-      <div style={{ display: 'flex', height: '100vh', fontFamily: "'DM Sans', system-ui, sans-serif", fontSize: 14, position: 'relative', background: '#0f172a' }}>
 
-        {/* DESKTOP SIDEBAR */}
-        <div className="desktop-sidebar" style={{ width: 320, display: 'flex', flexDirection: 'column', background: '#0f172a', borderRight: '1px solid #1e293b', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', height: '100dvh', fontFamily: "'DM Sans', system-ui, sans-serif", fontSize: 14, position: 'relative', background: '#0f172a' }}>
+
+        {/* ── DESKTOP SIDEBAR ── */}
+        <div className="desktop-only" style={{ width: 320, display: 'flex', flexDirection: 'column', background: '#0f172a', borderRight: '1px solid #1e293b', overflow: 'hidden' }}>
           <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid #1e293b' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
               <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 0 12px rgba(37,99,235,0.4)' }}>
@@ -947,13 +803,10 @@ export default function Home() {
               </div>
               <div>
                 <div style={{ fontWeight: 600, fontSize: 14, color: '#e2e8f0', letterSpacing: '-0.01em' }}>FuelPrice Ireland</div>
-                <div style={{ fontSize: 10, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginTop: 1 }}>
-                  {headerStationCount}
-                </div>
+                <div style={{ fontSize: 10, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginTop: 1 }}>{headerStationCount}</div>
               </div>
             </div>
 
-            {/* Cheapest cards */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
               {[
                 { label: 'Petrol', data: displayCheapest.petrol, color: '#22c55e' },
@@ -976,7 +829,6 @@ export default function Home() {
               ))}
             </div>
 
-            {/* Price scale */}
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, padding: '5px 8px', background: '#0f172a', borderRadius: 6, border: '1px solid #1e293b' }}>
               <span style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em' }}>€/L</span>
               {[
@@ -993,7 +845,6 @@ export default function Home() {
               ))}
             </div>
 
-            {/* Fuel filter tabs */}
             <div style={{ display: 'flex', gap: 4, marginBottom: 10, background: '#1e293b', borderRadius: 7, padding: 3 }}>
               {['all', 'petrol', 'diesel'].map(f => (
                 <button key={f} onClick={() => setFuelFilter(f)}
@@ -1003,19 +854,11 @@ export default function Home() {
               ))}
             </div>
 
-            {/* County filter */}
             <div style={{ marginBottom: 8 }}>
               <CountySelect value={countyFilter} onChange={setCountyFilter} countyCounts={countyCounts} />
             </div>
 
-            <SearchBar
-              search={search}
-              onSearchChange={handleSearchChange}
-              onSearchEnter={geocodeSearch}
-              onClear={clearSearch}
-              onLocate={locateMe}
-              locating={locating}
-            />
+            <SearchBar search={search} onSearchChange={handleSearchChange} onSearchEnter={geocodeSearch} onClear={clearSearch} onLocate={locateMe} locating={locating} />
             {locateError && <div style={{ marginTop: 6, padding: '6px 10px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 6, fontSize: 11, color: '#ef4444' }}>{locateError}</div>}
             {searching && <div style={{ marginTop: 6, fontSize: 10, color: '#475569', textAlign: 'center', letterSpacing: '0.05em' }}>SEARCHING...</div>}
             {searchGeoResult && (
@@ -1032,7 +875,6 @@ export default function Home() {
             )}
           </div>
 
-          {/* Sort row */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderBottom: '1px solid #1e293b' }}>
             <span style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Sort</span>
             <div style={{ width: 1, height: 10, background: '#1e293b' }} />
@@ -1046,7 +888,6 @@ export default function Home() {
             <span style={{ fontSize: 10, color: '#334155' }}>{filtered.length}</span>
           </div>
 
-          {/* Station list */}
           <div ref={stationListRef} style={{ overflowY: 'auto', flex: 1, padding: '8px 10px' }}>
             {loading && (
               <div style={{ padding: '16px 0' }}>
@@ -1078,7 +919,6 @@ export default function Home() {
                   userPos={userPos}
                   onClick={() => {
                     setSelected(s)
-                    setMobileListOpen(false)
                     map.current?.flyTo({ center: [s.lng, s.lat], zoom: Math.max(map.current?.getZoom() ?? 12, 13) })
                   }}
                 />
@@ -1087,12 +927,12 @@ export default function Home() {
           </div>
         </div>
 
-        {/* MAP */}
+        {/* ── MAP (full screen on mobile) ── */}
         <div style={{ flex: 1, position: 'relative' }}>
           <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
 
-          {/* Cheapest overlay */}
-          <div className="desktop-sidebar" style={{ display: 'flex', position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: 'rgba(15,23,42,0.92)', backdropFilter: 'blur(12px)', border: '1px solid #1e293b', borderRadius: 10, padding: '10px 20px', gap: 24, zIndex: 500, whiteSpace: 'nowrap', boxShadow: '0 4px 24px rgba(0,0,0,0.4)' }}>
+          {/* Desktop cheapest overlay */}
+          <div className="desktop-only" style={{ display: 'flex', position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: 'rgba(15,23,42,0.92)', backdropFilter: 'blur(12px)', border: '1px solid #1e293b', borderRadius: 10, padding: '10px 20px', gap: 24, zIndex: 500, whiteSpace: 'nowrap', boxShadow: '0 4px 24px rgba(0,0,0,0.4)' }}>
             {[
               { label: 'Petrol', data: displayCheapest.petrol, color: '#22c55e' },
               { label: 'Diesel', data: displayCheapest.diesel, color: '#f59e0b' },
@@ -1126,11 +966,10 @@ export default function Home() {
             </div>
           )}
 
-          {/* Station detail panel */}
+          {/* Desktop station detail panel */}
           {selected && (
-            <div style={{ position: 'absolute', bottom: 0, right: 0, width: 300, background: 'rgba(15,23,42,0.97)', backdropFilter: 'blur(12px)', borderTop: '1px solid #1e293b', borderLeft: '1px solid #1e293b', borderRadius: '10px 0 0 0', padding: 16, zIndex: 10, animation: 'slideUp 0.2s ease-out' }}>
+            <div className="desktop-only" style={{ position: 'absolute', bottom: 0, right: 0, width: 300, background: 'rgba(15,23,42,0.97)', backdropFilter: 'blur(12px)', borderTop: '1px solid #1e293b', borderLeft: '1px solid #1e293b', borderRadius: '10px 0 0 0', padding: 16, zIndex: 10, animation: 'slideUp 0.2s ease-out' }}>
               <button onClick={() => setSelected(null)} style={{ position: 'absolute', top: 12, right: 12, background: '#1e293b', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 14, color: '#475569' }}>×</button>
-              {/* Brand colour accent bar at top of panel */}
               <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, borderRadius: '10px 0 0 0', background: getBrandColor(selected.brand) }} />
               <div style={{ paddingRight: 28, marginBottom: 10, marginTop: 6 }}>
                 <div style={{ fontWeight: 600, fontSize: 14, color: '#f1f5f9', letterSpacing: '-0.01em', marginBottom: 2 }}>{selected.name}</div>
@@ -1172,109 +1011,196 @@ export default function Home() {
               </div>
             </div>
           )}
+
+          {/* ── MOBILE: Floating Near Me button ── */}
+          <button
+            className="mobile-sheet"
+            onClick={locateMe}
+            disabled={locating}
+            style={{
+              display: 'none',
+              position: 'absolute',
+              bottom: sheetState === 'open' ? `calc(${SHEET_OPEN_HEIGHT} + 16px)` : `${SHEET_PEEK_HEIGHT + 16}px`,
+              right: 16,
+              width: 52,
+              height: 52,
+              borderRadius: '50%',
+              background: locating ? '#1e40af' : '#2563eb',
+              color: 'white',
+              border: 'none',
+              cursor: locating ? 'wait' : 'pointer',
+              boxShadow: '0 4px 16px rgba(37,99,235,0.5)',
+              fontSize: 22,
+              zIndex: 700,
+              transition: 'bottom 0.3s ease',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            title="Near me"
+          >
+            {locating ? '…' : '⊕'}
+          </button>
         </div>
 
-        {/* MOBILE BOTTOM BAR */}
-        <div className="mobile-bar" style={{ display: 'none', position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(15,23,42,0.97)', backdropFilter: 'blur(12px)', borderTop: '1px solid #1e293b', flexDirection: 'column', zIndex: 600 }}>
-          <div onClick={() => setMobileListOpen(v => !v)} style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
-            <div style={{ display: 'flex', gap: 20 }}>
-              {[
-                { label: 'Petrol', data: displayCheapest.petrol, color: '#22c55e' },
-                { label: 'Diesel', data: displayCheapest.diesel, color: '#f59e0b' },
-              ].map(({ label, data, color }) => (
-                <div key={label} onClick={e => { e.stopPropagation(); data?.station_id && flyToStation(data.station_id) }}>
-                  <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#475569', letterSpacing: '0.08em' }}>{label}</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, fontFamily: '"DM Mono", monospace', color }}>
-                    {data ? `€${Number(data.price).toFixed(3)}` : '—'}
+        {/* ── MOBILE BOTTOM SHEET ── */}
+        <div
+          className="mobile-sheet"
+          style={{
+            display: 'none',
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: sheetState === 'open' ? SHEET_OPEN_HEIGHT : `${SHEET_PEEK_HEIGHT}px`,
+            background: 'rgba(10,15,28,0.98)',
+            backdropFilter: 'blur(16px)',
+            borderTop: '1px solid #1e293b',
+            borderRadius: '16px 16px 0 0',
+            flexDirection: 'column',
+            zIndex: 600,
+            transition: 'height 0.3s cubic-bezier(0.4,0,0.2,1)',
+            overflow: 'hidden',
+          }}
+        >
+          {/* Drag handle + cheapest prices row — always visible */}
+          <div
+            onClick={() => setSheetState(s => s === 'open' ? 'peek' : 'open')}
+            style={{ padding: '10px 16px 8px', cursor: 'pointer', flexShrink: 0 }}
+          >
+            {/* Handle pill */}
+            <div style={{ width: 36, height: 4, background: '#334155', borderRadius: 2, margin: '0 auto 10px' }} />
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              {/* Cheapest prices */}
+              <div style={{ display: 'flex', gap: 20 }}>
+                {[
+                  { label: 'Petrol', data: displayCheapest.petrol, color: '#22c55e' },
+                  { label: 'Diesel', data: displayCheapest.diesel, color: '#f59e0b' },
+                ].map(({ label, data, color }) => (
+                  <div key={label} onClick={e => { e.stopPropagation(); data?.station_id && flyToStation(data.station_id) }}>
+                    <div style={{ fontSize: 9, textTransform: 'uppercase', color: '#475569', letterSpacing: '0.08em' }}>{label}</div>
+                    <div style={{ fontSize: 22, fontWeight: 700, fontFamily: '"DM Mono", monospace', color, lineHeight: 1.1 }}>
+                      {data ? `€${Number(data.price).toFixed(3)}` : '—'}
+                    </div>
+                    <div style={{ fontSize: 10, color: '#475569', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 130 }}>
+                      {data?.station_name ?? '—'}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 10, color: '#475569' }}>{data?.station_name ?? '—'}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-              <button onClick={e => { e.stopPropagation(); locateMe() }} disabled={locating}
-                style={{ padding: '8px 14px', background: locating ? '#1e40af' : '#2563eb', color: 'white', border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: locating ? 'wait' : 'pointer', letterSpacing: '0.05em' }}>
-                {locating ? '...' : '⊕ NEAR ME'}
-              </button>
-              <div style={{ fontSize: 9, color: '#334155', letterSpacing: '0.08em' }}>{mobileListOpen ? '▼ HIDE' : '▲ STATIONS'}</div>
+                ))}
+              </div>
+              {/* Toggle arrow */}
+              <div style={{ fontSize: 18, color: '#475569', transform: sheetState === 'open' ? 'rotate(180deg)' : 'none', transition: 'transform 0.3s' }}>
+                ↑
+              </div>
             </div>
           </div>
-          {locateError && <div style={{ margin: '0 12px 8px', padding: '6px 10px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 6, fontSize: 11, color: '#ef4444' }}>{locateError}</div>}
 
-          {/* Mobile station detail */}
-          {selected && !mobileListOpen && (
-            <div style={{ padding: '12px 16px', borderTop: '1px solid #1e293b', animation: 'slideUp 0.2s ease-out' }}>
-              {/* Brand colour bar at top of mobile detail */}
-              <div style={{ height: 2, borderRadius: 1, background: getBrandColor(selected.brand), marginBottom: 10 }} />
+          {/* Selected station card — shows in peek state when a station is tapped */}
+          {selected && sheetState === 'peek' && (
+            <div style={{ padding: '0 12px 10px', flexShrink: 0, animation: 'fadeIn 0.15s ease' }}>
+              <div style={{ height: 1, background: '#1e293b', marginBottom: 10 }} />
+              <div style={{ height: 2, borderRadius: 1, background: getBrandColor(selected.brand), marginBottom: 8 }} />
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: '#f1f5f9' }}>{selected.name}</div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: '#f1f5f9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{selected.name}</div>
                   <div style={{ fontSize: 10, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}>{selected.county}</div>
                 </div>
-                <button onClick={() => setSelected(null)} style={{ background: '#1e293b', border: 'none', borderRadius: 4, width: 22, height: 22, cursor: 'pointer', fontSize: 14, color: '#475569', flexShrink: 0 }}>×</button>
+                <button onClick={() => setSelected(null)} style={{ background: '#1e293b', border: 'none', borderRadius: 4, width: 24, height: 24, cursor: 'pointer', fontSize: 14, color: '#475569', flexShrink: 0, marginLeft: 8 }}>×</button>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 44px', gap: 8 }}>
                 <div style={{ padding: '8px', borderRadius: 7, border: '1px solid #1e293b', background: '#0f172a', textAlign: 'center' }}>
                   <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Petrol</div>
-                  <div style={{ fontSize: 16, fontWeight: 700, fontFamily: '"DM Mono", monospace', color: getPriceColor(selected.petrolPrice) }}>
+                  <div style={{ fontSize: 17, fontWeight: 700, fontFamily: '"DM Mono", monospace', color: getPriceColor(selected.petrolPrice) }}>
                     {selected.petrolPrice ? `€${Number(selected.petrolPrice).toFixed(3)}` : '—'}
                   </div>
                 </div>
                 <div style={{ padding: '8px', borderRadius: 7, border: '1px solid #1e293b', background: '#0f172a', textAlign: 'center' }}>
                   <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Diesel</div>
-                  <div style={{ fontSize: 16, fontWeight: 700, fontFamily: '"DM Mono", monospace', color: getPriceColor(selected.dieselPrice) }}>
+                  <div style={{ fontSize: 17, fontWeight: 700, fontFamily: '"DM Mono", monospace', color: getPriceColor(selected.dieselPrice) }}>
                     {selected.dieselPrice ? `€${Number(selected.dieselPrice).toFixed(3)}` : '—'}
                   </div>
                 </div>
-                <button onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${selected.lat},${selected.lng}`, '_blank')}
-                  style={{ padding: '8px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-                  Go →
+                <button
+                  onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${selected.lat},${selected.lng}`, '_blank')}
+                  style={{ padding: '8px 4px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 7, fontSize: 18, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  →
                 </button>
               </div>
             </div>
           )}
 
-          {mobileListOpen && (
-            <div style={{ maxHeight: '55vh', overflowY: 'auto', padding: '0 10px 8px', borderTop: '1px solid #1e293b' }}>
-              <div style={{ padding: '8px 0' }}>
-                <SearchBar
-                  search={search}
-                  onSearchChange={handleSearchChange}
-                  onSearchEnter={geocodeSearch}
-                  onClear={clearSearch}
-                  onLocate={locateMe}
-                  locating={locating}
-                />
+          {/* Station list — visible when sheet is open */}
+          {sheetState === 'open' && (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              {/* Filters */}
+              <div style={{ padding: '8px 12px', borderTop: '1px solid #1e293b', flexShrink: 0 }}>
+                <SearchBar search={search} onSearchChange={handleSearchChange} onSearchEnter={geocodeSearch} onClear={clearSearch} onLocate={locateMe} locating={locating} />
+                {locateError && <div style={{ marginTop: 6, padding: '6px 10px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 6, fontSize: 11, color: '#ef4444' }}>{locateError}</div>}
+                <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                  <div style={{ display: 'flex', gap: 4, background: '#1e293b', borderRadius: 6, padding: 3, flex: 1 }}>
+                    {['all', 'petrol', 'diesel'].map(f => (
+                      <button key={f} onClick={() => setFuelFilter(f)}
+                        style={{ flex: 1, padding: '5px 0', borderRadius: 4, border: 'none', fontSize: 11, cursor: 'pointer', background: fuelFilter === f ? '#334155' : 'transparent', color: fuelFilter === f ? '#e2e8f0' : '#475569' }}>
+                        {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <CountySelect value={countyFilter} onChange={setCountyFilter} countyCounts={countyCounts} />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
+                  <span style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Sort</span>
+                  {['price', 'distance', 'updated'].map(s => (
+                    <button key={s} onClick={() => setSortBy(s)}
+                      style={{ padding: '3px 10px', borderRadius: 4, border: 'none', fontSize: 10, cursor: 'pointer', background: sortBy === s ? '#2563eb' : '#1e293b', color: sortBy === s ? 'white' : '#475569', fontWeight: sortBy === s ? 600 : 400 }}>
+                      {s.charAt(0).toUpperCase() + s.slice(1)}
+                    </button>
+                  ))}
+                  <div style={{ flex: 1 }} />
+                  <span style={{ fontSize: 10, color: '#334155' }}>{filtered.length}</span>
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 4, marginBottom: 8, background: '#1e293b', borderRadius: 6, padding: 3 }}>
-                {['all', 'petrol', 'diesel'].map(f => (
-                  <button key={f} onClick={() => setFuelFilter(f)}
-                    style={{ flex: 1, padding: '5px 0', borderRadius: 4, border: 'none', fontSize: 11, cursor: 'pointer', background: fuelFilter === f ? '#334155' : 'transparent', color: fuelFilter === f ? '#e2e8f0' : '#475569' }}>
-                    {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
-                  </button>
+
+              {/* Scrollable list */}
+              <div ref={stationListRef} style={{ overflowY: 'auto', flex: 1, padding: '4px 10px 20px' }}>
+                {loading && (
+                  <div style={{ padding: '12px 0' }}>
+                    {[70, 55, 80].map((width, i) => (
+                      <div key={i} style={{ padding: '12px', marginBottom: 4, borderRadius: 8, border: '1px solid #1e293b' }}>
+                        <div style={{ height: 12, background: '#1e293b', borderRadius: 4, marginBottom: 8, width: `${width}%`, animation: 'pulse 1.5s ease-in-out infinite' }} />
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <div style={{ height: 28, background: '#1e293b', borderRadius: 6, flex: 1 }} />
+                          <div style={{ height: 28, background: '#1e293b', borderRadius: 6, flex: 1 }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!loading && filtered.length === 0 && (
+                  <div style={{ padding: 24, textAlign: 'center', color: '#334155', fontSize: 12 }}>
+                    {countyFilter ? `No stations in ${countyFilter}` : 'No stations found'}
+                  </div>
+                )}
+                {!loading && filtered.map(s => (
+                  <div key={s.id} ref={el => { stationCardRefs.current[s.id] = el }}>
+                    <StationCard
+                      s={s}
+                      isSelected={selected?.id === s.id}
+                      isCheapestPetrol={displayCheapest.petrol?.station_id === s.id}
+                      isCheapestDiesel={displayCheapest.diesel?.station_id === s.id}
+                      fuelFilter={fuelFilter}
+                      userPos={userPos}
+                      onClick={() => {
+                        setSelected(s)
+                        setSheetState('peek')
+                        map.current?.flyTo({ center: [s.lng, s.lat], zoom: Math.max(map.current?.getZoom() ?? 12, 13) })
+                      }}
+                    />
+                  </div>
                 ))}
               </div>
-              <div style={{ marginBottom: 8 }}>
-                <CountySelect value={countyFilter} onChange={setCountyFilter} countyCounts={countyCounts} />
-              </div>
-              {filtered.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: '#334155', fontSize: 12 }}>{countyFilter ? `No stations in ${countyFilter}` : 'No stations found'}</div>}
-              {filtered.map(s => (
-                <div key={s.id} ref={el => { stationCardRefs.current[s.id] = el }}>
-                  <StationCard
-                    s={s}
-                    isSelected={selected?.id === s.id}
-                    isCheapestPetrol={displayCheapest.petrol?.station_id === s.id}
-                    isCheapestDiesel={displayCheapest.diesel?.station_id === s.id}
-                    fuelFilter={fuelFilter}
-                    userPos={userPos}
-                    onClick={() => {
-                      setSelected(s)
-                      setMobileListOpen(false)
-                      map.current?.flyTo({ center: [s.lng, s.lat], zoom: Math.max(map.current?.getZoom() ?? 12, 13) })
-                    }}
-                  />
-                </div>
-              ))}
             </div>
           )}
         </div>
@@ -1282,12 +1208,13 @@ export default function Home() {
 
       {/* Report modal */}
       {reportModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end', padding: 16 }}>
-          <div style={{ background: '#0f172a', borderRadius: 12, border: '1px solid #1e293b', width: 310, padding: 18, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: '0 0 env(safe-area-inset-bottom)' }}>
+          <div style={{ background: '#0f172a', borderRadius: '12px 12px 0 0', border: '1px solid #1e293b', width: '100%', maxWidth: 480, padding: 20, boxShadow: '0 -8px 32px rgba(0,0,0,0.5)' }}>
+            <div style={{ width: 36, height: 4, background: '#334155', borderRadius: 2, margin: '0 auto 16px' }} />
             <div style={{ fontWeight: 600, fontSize: 14, color: '#e2e8f0', marginBottom: 4 }}>Update prices</div>
             <div style={{ fontSize: 11, color: '#475569', marginBottom: 14 }}>{reportModal.name} · {reportModal.county}</div>
             {submitResult ? (
-              <div style={{ textAlign: 'center', padding: '12px 0' }}>
+              <div style={{ textAlign: 'center', padding: '16px 0' }}>
                 {submitResult.error
                   ? <div style={{ color: '#ef4444', fontSize: 13 }}>{submitResult.error}</div>
                   : <div style={{ fontSize: 14, fontWeight: 500, color: '#22c55e' }}>Submitted — thanks!</div>
@@ -1303,16 +1230,16 @@ export default function Home() {
                     <label style={{ fontSize: 11, color: '#475569', display: 'block', marginBottom: 4 }}>{label}</label>
                     <input type="number" step="0.001" placeholder={placeholder}
                       onChange={e => setReportForm(f => ({ ...f, [key]: e.target.value }))}
-                      style={{ width: '100%', padding: '8px 10px', border: '1px solid #334155', borderRadius: 6, fontSize: 13, marginBottom: 10, boxSizing: 'border-box', background: '#1e293b', color: '#e2e8f0', fontFamily: 'inherit', outline: 'none' }} />
+                      style={{ width: '100%', padding: '10px 12px', border: '1px solid #334155', borderRadius: 8, fontSize: 16, marginBottom: 12, boxSizing: 'border-box', background: '#1e293b', color: '#e2e8f0', fontFamily: 'inherit', outline: 'none' }} />
                   </div>
                 ))}
-                <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 4 }}>
                   <button onClick={() => { setReportModal(null); setSubmitResult(null) }}
-                    style={{ flex: 1, padding: 9, background: 'transparent', border: '1px solid #1e293b', borderRadius: 6, fontSize: 12, cursor: 'pointer', color: '#475569' }}>
+                    style={{ padding: 12, background: 'transparent', border: '1px solid #1e293b', borderRadius: 8, fontSize: 14, cursor: 'pointer', color: '#475569' }}>
                     Cancel
                   </button>
                   <button onClick={submitReport} disabled={submitting}
-                    style={{ flex: 1, padding: 9, background: '#22c55e', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', color: '#0f172a', letterSpacing: '0.03em' }}>
+                    style={{ padding: 12, background: '#22c55e', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', color: '#0f172a', letterSpacing: '0.03em' }}>
                     {submitting ? 'Submitting...' : 'Submit'}
                   </button>
                 </div>
