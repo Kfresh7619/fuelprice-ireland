@@ -327,6 +327,8 @@ export default function Home() {
   const [userPos, setUserPos] = useState(null)
   // Mobile sheet: 'collapsed' | 'peek' | 'open'
   const [sheetState, setSheetState] = useState('peek')
+  // Mobile map: hidden by default, shown when Near Me or search activates
+  const [mobileMapVisible, setMobileMapVisible] = useState(false)
   const [locating, setLocating] = useState(false)
   const [locateError, setLocateError] = useState(null)
   const [searching, setSearching] = useState(false)
@@ -655,6 +657,7 @@ export default function Home() {
       if (feature) {
         const [lng, lat] = feature.center
         setSearchGeoResult({ lat, lng, name: feature.place_name })
+        setMobileMapVisible(true)
         map.current?.flyTo({ center: [lng, lat], zoom: 11 })
         const stationsRes = await fetch(`/api/stations/nearby?lat=${lat}&lng=${lng}&radius=30000`)
         const stationsData = await stationsRes.json()
@@ -684,6 +687,8 @@ export default function Home() {
     setUserPos(null)
     setCountyFilter('')
     setSelected(null)
+    setMobileMapVisible(false)
+    setSheetState('peek')
     setStations(allStations)
     if (map.current && mapReady) updateMapSource(map.current, allStations, null)
     map.current?.flyTo({ center: [-8.0, 53.4], zoom: 6.5 })
@@ -700,6 +705,7 @@ export default function Home() {
         setUserPos({ lat, lng })
         setSortBy('distance')
         setLocating(false)
+        setMobileMapVisible(true)
         map.current?.flyTo({ center: [lng, lat], zoom: 12 })
         fetch(`/api/stations/nearby?lat=${lat}&lng=${lng}&radius=25000`)
           .then(r => r.json())
@@ -961,9 +967,44 @@ export default function Home() {
           </div>
         </div>
 
-        {/* ── MAP (full screen on mobile) ── */}
-        <div style={{ flex: 1, position: 'relative' }}>
-          <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
+        {/* ── MAP (full screen on mobile, conditionally shown) ── */}
+        <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+          {/* Map canvas — always mounted (keeps state), but hidden on mobile until Near Me */}
+          <div
+            ref={mapContainer}
+            style={{
+              width: '100%',
+              height: '100%',
+              position: 'absolute',
+              top: 0, left: 0, right: 0, bottom: 0,
+            }}
+          />
+
+          {/* Mobile: Back to list button — shown only when map is active */}
+          <button
+            className="mobile-sheet"
+            onClick={() => { setMobileMapVisible(false); setSheetState('peek'); setSelected(null) }}
+            style={{
+              display: 'none',
+              position: 'absolute',
+              top: 12,
+              left: 12,
+              zIndex: 700,
+              background: 'rgba(10,15,28,0.92)',
+              backdropFilter: 'blur(12px)',
+              border: '1px solid #1e293b',
+              borderRadius: 10,
+              padding: '8px 14px',
+              color: '#e2e8f0',
+              fontSize: 13,
+              fontWeight: 500,
+              cursor: 'pointer',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            ← List
+          </button>
 
           {/* Desktop cheapest overlay */}
           <div className="desktop-only" style={{ display: 'flex', position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: 'rgba(15,23,42,0.92)', backdropFilter: 'blur(12px)', border: '1px solid #1e293b', borderRadius: 10, padding: '10px 20px', gap: 24, zIndex: 500, whiteSpace: 'nowrap', boxShadow: '0 4px 24px rgba(0,0,0,0.4)' }}>
@@ -1046,42 +1087,45 @@ export default function Home() {
             </div>
           )}
 
-          {/* ── MOBILE: Floating Near Me button ── */}
-          <button
-            className="mobile-sheet"
-            onClick={locateMe}
-            disabled={locating}
-            style={{
-              display: 'none',
-              position: 'absolute',
-              bottom: sheetState === 'open' ? `calc(${SHEET_OPEN_HEIGHT} + 16px)` : `${SHEET_PEEK_HEIGHT + 16}px`,
-              right: 16,
-              width: 52,
-              height: 52,
-              borderRadius: '50%',
-              background: locating ? '#1e40af' : '#2563eb',
-              color: 'white',
-              border: 'none',
-              cursor: locating ? 'wait' : 'pointer',
-              boxShadow: '0 4px 20px rgba(37,99,235,0.6), 0 0 0 3px rgba(37,99,235,0.15)',
-              animation: 'fabPulse 2.5s ease-in-out infinite',
-              fontSize: 22,
-              zIndex: 700,
-              transition: 'bottom 0.3s ease',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-            title="Near me"
-          >
-            {locating ? '…' : '⊕'}
-          </button>
+          {/* ── MOBILE: Floating Near Me button — only when map is visible ── */}
+          {mobileMapVisible && (
+            <button
+              className="mobile-sheet"
+              onClick={locateMe}
+              disabled={locating}
+              style={{
+                display: 'flex',
+                position: 'absolute',
+                bottom: sheetState === 'open' ? `calc(${SHEET_OPEN_HEIGHT} + 16px)` : `${SHEET_PEEK_HEIGHT + 16}px`,
+                right: 16,
+                width: 52,
+                height: 52,
+                borderRadius: '50%',
+                background: locating ? '#1e40af' : '#2563eb',
+                color: 'white',
+                border: 'none',
+                cursor: locating ? 'wait' : 'pointer',
+                boxShadow: '0 4px 20px rgba(37,99,235,0.6), 0 0 0 3px rgba(37,99,235,0.15)',
+                animation: 'fabPulse 2.5s ease-in-out infinite',
+                fontSize: 22,
+                zIndex: 700,
+                transition: 'bottom 0.3s ease',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              title="Near me"
+            >
+              {locating ? '…' : '⊕'}
+            </button>
+          )}
         </div>
 
-        {/* ── MOBILE BOTTOM SHEET ── */}
+        {/* ── MOBILE BOTTOM SHEET — only when map is visible ── */}
+        {mobileMapVisible && (
         <div
           className="mobile-sheet"
           style={{
-            display: 'none',
+            display: 'flex',
             position: 'absolute',
             bottom: 0,
             left: 0,
@@ -1250,7 +1294,189 @@ export default function Home() {
             </div>
           )}
         </div>
+        )} {/* end mobileMapVisible — bottom sheet */}
       </div>
+
+      {/* ── MOBILE FULL-SCREEN LIST (default, no map) ── */}
+      {!mobileMapVisible && (
+        <div className="mobile-sheet" style={{
+          display: 'none',
+          position: 'absolute',
+          inset: 0,
+          background: '#08111f',
+          flexDirection: 'column',
+          zIndex: 500,
+          overflow: 'hidden',
+        }}>
+          {/* Header */}
+          <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid #1e293b', flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ width: 28, height: 28, background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 10px rgba(37,99,235,0.4)' }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="white"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+                </div>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#e2e8f0', letterSpacing: '-0.01em' }}>FuelPrice Ireland</div>
+                  <div style={{ fontSize: 10, color: '#475569', letterSpacing: '0.04em' }}>{headerStationCount}</div>
+                </div>
+              </div>
+              {/* Cheapest prices compact */}
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                {[
+                  { data: displayCheapest.petrol, color: '#22c55e', label: 'P' },
+                  { data: displayCheapest.diesel, color: '#f59e0b', label: 'D' },
+                ].map(({ data, color, label }) => (
+                  <div key={label} style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 9, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label === 'P' ? 'Petrol' : 'Diesel'}</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, fontFamily: '"DM Mono", monospace', color, lineHeight: 1, letterSpacing: '-0.02em' }}>
+                      {data ? `€${Number(data.price).toFixed(3)}` : '—'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Search + Near Me */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+              <div style={{ flex: 1, position: 'relative' }}>
+                <svg style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: '#475569', pointerEvents: 'none' }} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input
+                  value={search}
+                  onChange={e => handleSearchChange(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && geocodeSearch(search)}
+                  placeholder="Search station, town, county..."
+                  style={{ width: '100%', padding: '10px 28px 10px 28px', border: '1px solid #1e293b', borderRadius: 10, fontSize: 13, outline: 'none', boxSizing: 'border-box', background: '#1a2540', color: '#e2e8f0', fontFamily: 'inherit' }}
+                />
+                {search && (
+                  <button onClick={clearSearch} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#475569', fontSize: 18, lineHeight: 1, padding: 0 }}>×</button>
+                )}
+              </div>
+              <button
+                onClick={locateMe}
+                disabled={locating}
+                style={{ padding: '10px 16px', background: locating ? '#1e40af' : '#2563eb', color: 'white', border: 'none', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: locating ? 'wait' : 'pointer', whiteSpace: 'nowrap', letterSpacing: '0.04em', minHeight: 44, display: 'flex', alignItems: 'center', gap: 6 }}
+              >
+                {locating ? '…' : '⊕'} {locating ? '' : 'Near Me'}
+              </button>
+            </div>
+
+            {/* Error */}
+            {locateError && (
+              <div style={{ marginBottom: 8, padding: '8px 12px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 8, fontSize: 12, color: '#fca5a5', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>{locateError}</span>
+                <button onClick={() => setLocateError(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#475569', fontSize: 16, padding: 0, marginLeft: 8 }}>×</button>
+              </div>
+            )}
+            {searching && <div style={{ marginBottom: 8, fontSize: 11, color: '#475569', textAlign: 'center' }}>Searching…</div>}
+
+            {/* Filters row */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: 3, background: '#1a2540', borderRadius: 8, padding: 3, flexShrink: 0 }}>
+                {['all', 'petrol', 'diesel'].map(f => (
+                  <button key={f} onClick={() => setFuelFilter(f)}
+                    style={{ padding: '5px 10px', borderRadius: 6, border: 'none', fontSize: 12, cursor: 'pointer', background: fuelFilter === f ? '#2563eb' : 'transparent', color: fuelFilter === f ? 'white' : '#64748b', fontWeight: fuelFilter === f ? 600 : 400, transition: 'all 0.15s' }}>
+                    {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
+                  </button>
+                ))}
+              </div>
+              <div style={{ flex: 1 }}>
+                <CountySelect value={countyFilter} onChange={setCountyFilter} countyCounts={countyCounts} />
+              </div>
+            </div>
+          </div>
+
+          {/* Sort row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderBottom: '1px solid #1e293b', flexShrink: 0 }}>
+            <span style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 500 }}>Sort</span>
+            <div style={{ width: 1, height: 10, background: '#1e293b' }} />
+            {['price', 'distance', 'updated'].map(s => (
+              <button key={s} onClick={() => setSortBy(s)}
+                style={{ padding: '3px 10px', borderRadius: 6, border: 'none', fontSize: 11, cursor: 'pointer', background: sortBy === s ? '#2563eb' : 'transparent', color: sortBy === s ? 'white' : '#475569', fontWeight: sortBy === s ? 600 : 400, transition: 'all 0.15s' }}>
+                {s.charAt(0).toUpperCase() + s.slice(1)}
+              </button>
+            ))}
+            <div style={{ flex: 1 }} />
+            <span style={{ fontSize: 11, color: '#64748b', fontFamily: '"DM Mono", monospace', fontWeight: 500 }}>{filtered.length}</span>
+          </div>
+
+          {/* Station list */}
+          <div ref={stationListRef} style={{ overflowY: 'auto', flex: 1, padding: '8px 10px 20px', WebkitOverflowScrolling: 'touch' }}>
+            {loading && (
+              <div style={{ padding: '16px 0' }}>
+                {[70, 55, 80, 60, 75].map((width, i) => (
+                  <div key={i} style={{ padding: '12px', marginBottom: 4, borderRadius: 8, border: '1px solid #1e293b', background: '#0f172a' }}>
+                    <div style={{ height: 12, background: '#1e293b', borderRadius: 4, marginBottom: 8, width: `${width}%`, animation: 'pulse 1.5s ease-in-out infinite' }} />
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ height: 28, background: '#1e293b', borderRadius: 6, flex: 1, animation: 'pulse 1.5s ease-in-out infinite' }} />
+                      <div style={{ height: 28, background: '#1e293b', borderRadius: 6, flex: 1, animation: 'pulse 1.5s ease-in-out infinite' }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {!loading && filtered.length === 0 && (
+              <div style={{ padding: '48px 24px', textAlign: 'center' }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>⛽</div>
+                <div style={{ fontSize: 14, color: '#475569', marginBottom: 6, fontWeight: 500 }}>
+                  {countyFilter ? `No stations in ${countyFilter}` : 'No stations found'}
+                </div>
+                <div style={{ fontSize: 12, color: '#334155' }}>Try adjusting your filters</div>
+              </div>
+            )}
+            {!loading && filtered.map(s => (
+              <div key={s.id} ref={el => { stationCardRefs.current[s.id] = el }}>
+                <StationCard
+                  s={s}
+                  isSelected={selected?.id === s.id}
+                  isCheapestPetrol={displayCheapest.petrol?.station_id === s.id}
+                  isCheapestDiesel={displayCheapest.diesel?.station_id === s.id}
+                  fuelFilter={fuelFilter}
+                  userPos={userPos}
+                  onClick={() => {
+                    setSelected(s)
+                    setReportModal(null)
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+
+          {/* Selected station detail — slides up from bottom */}
+          {selected && (
+            <div style={{ flexShrink: 0, borderTop: '1px solid #1e293b', padding: '12px 14px', background: '#0f172a', animation: 'slideUp 0.2s ease-out' }}>
+              <div style={{ height: 2, borderRadius: 1, background: getBrandColor(selected.brand), marginBottom: 10 }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: '#f1f5f9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{selected.name}</div>
+                  <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2 }}>{selected.county}{userPos ? ` · ${distKm(userPos, selected).toFixed(1)}km` : ''}</div>
+                </div>
+                <button onClick={() => setSelected(null)} style={{ background: '#1e293b', border: 'none', borderRadius: 6, width: 28, height: 28, cursor: 'pointer', fontSize: 16, color: '#64748b', flexShrink: 0, marginLeft: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 52px', gap: 8 }}>
+                {[{ label: 'Petrol', price: selected.petrolPrice }, { label: 'Diesel', price: selected.dieselPrice }].map(({ label, price }) => (
+                  <div key={label} style={{ padding: '8px 10px', borderRadius: 8, border: `1px solid ${price ? getPriceColor(price) + '40' : '#1e293b'}`, background: '#080f1e', textAlign: 'center' }}>
+                    <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3, fontWeight: 500 }}>{label}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, fontFamily: '"DM Mono", monospace', color: getPriceColor(price), lineHeight: 1 }}>
+                      {price ? `€${Number(price).toFixed(3)}` : '—'}
+                    </div>
+                    {price && <PriceBar price={price} />}
+                  </div>
+                ))}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <button
+                    onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${selected.lat},${selected.lng}`, '_blank')}
+                    style={{ flex: 1, background: '#2563eb', color: 'white', border: 'none', borderRadius: 8, fontSize: 20, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 44 }}
+                  >→</button>
+                  <button
+                    onClick={() => { setReportModal(selected); setReportForm({}) }}
+                    style={{ flex: 1, background: '#1a2540', color: '#60a5fa', border: '1px solid #1e3a5f', borderRadius: 8, fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 32 }}
+                  >✎</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Report modal */}
       {reportModal && (
